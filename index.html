@@ -3,70 +3,57 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>高数日练 · AI 自适应刷题系统</title>
-
+  <title>高数日练 · AI 高数自适应刷题系统</title>
   <script src="https://cdn.tailwindcss.com"></script>
-
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
-
-  <script defer
-          src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script defer
-          src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 </head>
 
 <body class="min-h-screen bg-slate-950 text-slate-100 font-sans">
 
-  <!-- 顶栏 -->
   <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
     <div class="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
       <div>
         <h1 class="text-lg font-bold text-sky-300">高数日练</h1>
-        <p class="text-xs text-slate-500">AI 考研数学基础计算自适应刷题 Demo</p>
+        <p class="text-xs text-slate-500">考研数学基础计算 · AI 自适应刷题 Demo</p>
       </div>
 
-      <nav class="flex gap-1 text-sm">
+      <nav class="flex gap-1 text-sm flex-wrap">
         <button data-tab="dashboard" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">首页</button>
         <button data-tab="diagnose" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">能力诊断</button>
         <button data-tab="practice" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">每日刷题</button>
-        <button data-tab="records" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">错题/复习</button>
+        <button data-tab="records" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">错题复习</button>
         <button data-tab="stats" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">数据仪表盘</button>
       </nav>
     </div>
   </header>
 
-  <!-- 主内容区 -->
   <main class="mx-auto max-w-4xl px-4 py-8">
 
-    <!-- 首页 / Dashboard -->
     <section id="view-dashboard" class="view-section hidden">
       <div id="dashboard-main" class="space-y-6"></div>
     </section>
 
-    <!-- 能力诊断 -->
     <section id="view-diagnose" class="view-section hidden">
       <div id="diagnose-main" class="space-y-6"></div>
     </section>
 
-    <!-- 每日刷题 -->
     <section id="view-practice" class="view-section hidden">
       <div id="practice-main" class="space-y-6"></div>
     </section>
 
-    <!-- 错题/复习 -->
     <section id="view-records" class="view-section hidden">
       <div id="records-main" class="space-y-6"></div>
     </section>
 
-    <!-- 数据页 -->
     <section id="view-stats" class="view-section hidden">
       <div id="stats-main" class="space-y-6"></div>
     </section>
 
   </main>
 
-  <!-- 页面底部挂件 -->
   <footer class="border-t border-slate-800 bg-slate-950 py-5 text-center text-xs text-slate-600">
     <p>学生作品集 Demo · AI 判题与解析可能存在错误 · 不作为备考依据</p>
     <p class="mt-1">复习规则：做错 2 天后复习；再做错 5 天后复习；连续答对 3 次移出高频复习池</p>
