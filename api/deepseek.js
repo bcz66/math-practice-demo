@@ -49,7 +49,15 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     console.error('DeepSeek API error:', error);
 
-    return res.status(500).json({
+    const upstreamStatus = Number(error?.statusCode);
+    const status =
+      Number.isInteger(upstreamStatus) &&
+      upstreamStatus >= 400 &&
+      upstreamStatus < 600
+        ? upstreamStatus
+        : 500;
+
+    return res.status(status).json({
       error: error.message || 'DeepSeek request failed'
     });
   }
@@ -80,6 +88,9 @@ async function callDeepSeek(
 
       body: JSON.stringify({
         model: 'deepseek-v4-flash',
+        thinking: {
+          type: 'disabled'
+        },
         messages,
         response_format: {
           type: 'json_object'
@@ -93,10 +104,12 @@ async function callDeepSeek(
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       data?.error?.message ||
       `DeepSeek HTTP ${response.status}`
     );
+    error.statusCode = response.status;
+    throw error;
   }
 
   const content = data?.choices?.[0]?.message?.content;

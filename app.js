@@ -139,6 +139,7 @@
   let state = loadState();
   let currentView = 'dashboard';
   let apiHealthy = null;
+  let apiLastError = null;
 
   // 题目预取缓存：把 AI 等待时间尽量藏到用户阅读/作答期间。
   // 这里只放内存，不写入 LocalStorage，刷新后自然失效。
@@ -525,16 +526,46 @@
     renderApiStatus();
   }
 
+  function shortApiError(error) {
+    const raw = String(error?.message || error || '请求失败').trim();
+
+    if (/402|余额|balance|insufficient/i.test(raw)) return '余额不足';
+    if (/401|api.?key|unauthor/i.test(raw)) return 'API Key 无效';
+    if (/429|rate|频率|too many/i.test(raw)) return '请求过于频繁';
+    if (/503|overload|繁忙|unavailable/i.test(raw)) return '服务暂时繁忙';
+    if (/timeout|timed out|超时/i.test(raw)) return '请求超时';
+
+    return raw.length > 28 ? `${raw.slice(0, 28)}…` : raw;
+  }
+
+  function markApiRequestSuccess() {
+    apiHealthy = true;
+    apiLastError = null;
+    renderApiStatus();
+  }
+
+  function markApiRequestFailure(error) {
+    apiLastError = shortApiError(error);
+    renderApiStatus();
+
+    // 一次模型请求失败不等于整个 API 断线。
+    // 后台重新检查 /api/deepseek 是否仍可访问，避免误报“未连接”。
+    checkApiHealth().catch(() => {});
+  }
+
   function renderApiStatus() {
     const text = $('apiStatusText');
     const dot = $('apiStatusDot');
     if (!text || !dot) return;
 
-    if (apiHealthy === true) {
+    if (apiHealthy === true && apiLastError) {
+      text.textContent = `已连接 · 最近请求失败：${apiLastError}`;
+      dot.className = 'h-2 w-2 rounded-full bg-amber-400';
+    } else if (apiHealthy === true) {
       text.textContent = 'DeepSeek 已连接';
       dot.className = 'h-2 w-2 rounded-full bg-emerald-500';
     } else if (apiHealthy === false) {
-      text.textContent = '未连接，使用本地备用题';
+      text.textContent = '服务端未连接，使用本地备用题';
       dot.className = 'h-2 w-2 rounded-full bg-amber-400';
     } else {
       text.textContent = '检测中';
@@ -1025,8 +1056,7 @@
         userAnswer
       });
 
-      apiHealthy = true;
-      renderApiStatus();
+      markApiRequestSuccess();
 
       if (typeof result.correct === 'boolean') {
         return {
@@ -1039,8 +1069,7 @@
 
     } catch (error) {
       console.warn(error);
-      apiHealthy = false;
-      renderApiStatus();
+      markApiRequestFailure(error);
 
       return {
         correct: null,
@@ -1322,8 +1351,7 @@
         throw new Error('AI 返回题目为空');
       }
 
-      apiHealthy = true;
-      renderApiStatus();
+      markApiRequestSuccess();
 
       const q = data.questions[0];
       const provisionalDifficulty = clamp(
@@ -1414,11 +1442,10 @@
 
     } catch (error) {
       console.warn(error);
-      apiHealthy = false;
-      renderApiStatus();
+      markApiRequestFailure(error);
 
       toast(
-        'AI 暂不可用，已切换到本地备用题'
+        `AI 本次出题失败，已使用本地备用题：${shortApiError(error)}`
       );
 
       return fallbackQuestion(plan);

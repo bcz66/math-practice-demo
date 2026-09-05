@@ -375,3 +375,12 @@ DEEPSEEK_API_KEY=你的 DeepSeek API Key
 - Difficulty Evaluator 输出预算同步缩减，减少无意义的模型生成等待。
 
 本次没有修改 index.html 的页面结构，也没有删除任何现有功能。
+
+
+## v3.3 AI 服务稳定性修复
+
+- DeepSeek V4 Flash 请求显式关闭 thinking mode，减少普通出题、判题和难度评估的额外推理等待。
+- 将“API 是否连接”和“某一次模型请求是否失败”拆开，单次超时/服务繁忙不再误显示为整个 AI 服务未连接。
+- 最近一次请求失败时会显示简短原因，例如余额不足、API Key 无效、请求过于频繁、服务繁忙或超时。
+- DeepSeek 上游 HTTP 状态码会由 Serverless Function 原样传给前端，便于定位 401 / 402 / 429 / 503 等问题。
+- 其他页面、预取机制、自适应难度算法、错题复习和 Anchor 校准接口均未修改。
