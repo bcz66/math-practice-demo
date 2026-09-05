@@ -3,64 +3,821 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>高数日练 · AI 高数自适应刷题系统</title>
+  <meta name="theme-color" content="#f7f6f2" />
+  <title>CalcDaily · 考研高数每日刷题</title>
+
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            paper: '#f7f6f2',
+            ink: '#2b2926',
+            muted: '#77736d',
+            line: '#e7e3dc',
+            clay: '#c96545',
+            claySoft: '#f4e5de',
+            sage: '#627a66',
+            sageSoft: '#e7eee8'
+          },
+          boxShadow: {
+            soft: '0 1px 2px rgba(35, 31, 27, .05), 0 8px 30px rgba(35, 31, 27, .04)'
+          },
+          fontFamily: {
+            sans: [
+              'Inter',
+              'ui-sans-serif',
+              '-apple-system',
+              'BlinkMacSystemFont',
+              'Segoe UI',
+              'sans-serif'
+            ]
+          }
+        }
+      }
+    };
+  </script>
+
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['\\[', '\\]'], ['$$', '$$']]
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+
+  <script
+    defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js">
+  </script>
+
+  <style>
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    }
+
+    .nav-btn.active {
+      background: #efede8;
+      color: #2b2926;
+    }
+
+    .nav-btn.active .nav-dot {
+      background: #c96545;
+    }
+
+    .progress-ring {
+      transition: stroke-dashoffset .3s ease;
+    }
+
+    .question-enter {
+      animation: questionIn .22s ease-out;
+    }
+
+    @keyframes questionIn {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .thin-scrollbar::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .thin-scrollbar::-webkit-scrollbar-thumb {
+      background: #d8d4cd;
+      border-radius: 999px;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+    }
+  </style>
 </head>
 
-<body class="min-h-screen bg-slate-950 text-slate-100 font-sans">
+<body class="bg-paper text-ink font-sans antialiased">
 
-  <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
-    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
-      <div>
-        <h1 class="text-lg font-bold text-sky-300">高数日练</h1>
-        <p class="text-xs text-slate-500">考研数学基础计算 · AI 自适应刷题 Demo</p>
+  <div class="min-h-screen lg:grid lg:grid-cols-[248px_1fr]">
+
+    <!-- Sidebar -->
+    <aside
+      class="border-b border-line bg-[#f1f0eb]
+             lg:fixed lg:inset-y-0 lg:left-0 lg:w-[248px]
+             lg:border-b-0 lg:border-r">
+
+      <div class="flex h-full flex-col px-4 py-4 lg:py-6">
+
+        <div class="flex items-center justify-between px-2">
+
+          <button
+            class="flex items-center gap-3"
+            data-view-target="dashboard"
+            aria-label="返回首页">
+
+            <div
+              class="grid h-9 w-9 place-items-center
+                     rounded-xl border border-[#ddd8d0]
+                     bg-white shadow-sm">
+
+              <span class="text-lg font-semibold text-clay">∫</span>
+            </div>
+
+            <div class="text-left">
+
+              <div class="text-sm font-semibold tracking-tight">
+                CalcDaily
+              </div>
+
+              <div class="text-[11px] text-muted">
+                考研高数自适应练习
+              </div>
+
+            </div>
+
+          </button>
+
+          <button
+            id="mobileMenuBtn"
+            class="rounded-lg p-2 text-muted hover:bg-white lg:hidden">
+            ☰
+          </button>
+
+        </div>
+
+        <nav
+          id="sideNav"
+          class="mt-5 hidden space-y-1 lg:block">
+
+          <button
+            class="nav-btn active flex w-full items-center gap-3
+                   rounded-xl px-3 py-2.5 text-left text-sm text-muted
+                   transition hover:bg-white/70 hover:text-ink"
+            data-view-target="dashboard">
+
+            <span class="nav-dot h-1.5 w-1.5 rounded-full bg-transparent"></span>
+            <span>数据仪表盘</span>
+
+          </button>
+
+          <button
+            class="nav-btn flex w-full items-center gap-3
+                   rounded-xl px-3 py-2.5 text-left text-sm text-muted
+                   transition hover:bg-white/70 hover:text-ink"
+            data-view-target="diagnosis">
+
+            <span class="nav-dot h-1.5 w-1.5 rounded-full bg-transparent"></span>
+            <span>能力诊断</span>
+
+          </button>
+
+          <button
+            class="nav-btn flex w-full items-center gap-3
+                   rounded-xl px-3 py-2.5 text-left text-sm text-muted
+                   transition hover:bg-white/70 hover:text-ink"
+            data-view-target="daily">
+
+            <span class="nav-dot h-1.5 w-1.5 rounded-full bg-transparent"></span>
+            <span>每日刷题</span>
+
+          </button>
+
+          <button
+            class="nav-btn flex w-full items-center gap-3
+                   rounded-xl px-3 py-2.5 text-left text-sm text-muted
+                   transition hover:bg-white/70 hover:text-ink"
+            data-view-target="review">
+
+            <span class="nav-dot h-1.5 w-1.5 rounded-full bg-transparent"></span>
+            <span>错题复习</span>
+
+            <span
+              id="sidebarReviewCount"
+              class="ml-auto hidden rounded-full bg-claySoft
+                     px-2 py-0.5 text-[11px] font-medium text-clay">
+              0
+            </span>
+
+          </button>
+
+          <button
+            class="nav-btn flex w-full items-center gap-3
+                   rounded-xl px-3 py-2.5 text-left text-sm text-muted
+                   transition hover:bg-white/70 hover:text-ink"
+            data-view-target="checkin">
+
+            <span class="nav-dot h-1.5 w-1.5 rounded-full bg-transparent"></span>
+            <span>打卡统计</span>
+
+          </button>
+
+        </nav>
+
+        <div class="mt-auto hidden lg:block">
+
+          <div
+            class="rounded-2xl border border-line bg-white/70 p-3.5">
+
+            <div class="flex items-center justify-between gap-3">
+
+              <div>
+
+                <div class="text-xs font-medium">
+                  AI 服务
+                </div>
+
+                <div
+                  id="apiStatusText"
+                  class="mt-0.5 text-[11px] text-muted">
+                  检测中
+                </div>
+
+              </div>
+
+              <span
+                id="apiStatusDot"
+                class="h-2 w-2 rounded-full bg-amber-400">
+              </span>
+
+            </div>
+
+          </div>
+
+          <button
+            id="resetDataBtn"
+            class="mt-3 w-full rounded-xl px-3 py-2
+                   text-left text-xs text-muted
+                   transition hover:bg-white hover:text-red-600">
+
+            重置本地数据
+
+          </button>
+
+        </div>
+
       </div>
 
-      <nav class="flex gap-1 text-sm flex-wrap">
-        <button data-tab="dashboard" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">首页</button>
-        <button data-tab="diagnose" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">能力诊断</button>
-        <button data-tab="practice" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">每日刷题</button>
-        <button data-tab="records" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">错题复习</button>
-        <button data-tab="stats" class="tab-btn px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800">数据仪表盘</button>
-      </nav>
-    </div>
-  </header>
+    </aside>
 
-  <main class="mx-auto max-w-4xl px-4 py-8">
+    <!-- Main -->
+    <main class="lg:col-start-2">
 
-    <section id="view-dashboard" class="view-section hidden">
-      <div id="dashboard-main" class="space-y-6"></div>
-    </section>
+      <div
+        class="mx-auto max-w-6xl px-4 pb-28 pt-6
+               sm:px-6 lg:px-10 lg:pt-10">
 
-    <section id="view-diagnose" class="view-section hidden">
-      <div id="diagnose-main" class="space-y-6"></div>
-    </section>
+        <header
+          class="mb-8 flex flex-col gap-4
+                 sm:flex-row sm:items-end sm:justify-between">
 
-    <section id="view-practice" class="view-section hidden">
-      <div id="practice-main" class="space-y-6"></div>
-    </section>
+          <div>
 
-    <section id="view-records" class="view-section hidden">
-      <div id="records-main" class="space-y-6"></div>
-    </section>
+            <div
+              id="pageEyebrow"
+              class="text-xs font-medium uppercase
+                     tracking-[0.14em] text-muted">
+              Overview
+            </div>
 
-    <section id="view-stats" class="view-section hidden">
-      <div id="stats-main" class="space-y-6"></div>
-    </section>
+            <h1
+              id="pageTitle"
+              class="mt-2 text-3xl font-semibold tracking-[-0.03em]
+                     sm:text-4xl">
+              今天也只做一点点。
+            </h1>
 
-  </main>
+            <p
+              id="pageSubtitle"
+              class="mt-2 max-w-2xl text-sm leading-6 text-muted">
+              把极限、导数、积分拆成每天 8–12 道的小剂量训练。
+            </p>
 
-  <footer class="border-t border-slate-800 bg-slate-950 py-5 text-center text-xs text-slate-600">
-    <p>学生作品集 Demo · AI 判题与解析可能存在错误 · 不作为备考依据</p>
-    <p class="mt-1">复习规则：做错 2 天后复习；再做错 5 天后复习；连续答对 3 次移出高频复习池</p>
-  </footer>
+          </div>
 
-  <div id="toast-root" class="fixed top-6 right-6 z-50 space-y-2"></div>
+          <div class="flex items-center gap-2">
 
-  <script src="app.js"></script>
+            <div
+              class="rounded-full border border-line bg-white
+                     px-3 py-1.5 text-xs text-muted shadow-sm">
+
+              <span id="todayLabel">—</span>
+
+            </div>
+
+          </div>
+
+        </header>
+
+        <!-- Dashboard -->
+        <section
+          id="view-dashboard"
+          class="view space-y-6">
+
+          <div
+            class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft">
+
+              <div class="text-xs text-muted">
+                今日进度
+              </div>
+
+              <div
+                class="mt-3 flex items-end
+                       justify-between gap-4">
+
+                <div>
+                  <span
+                    id="todayDone"
+                    class="text-3xl font-semibold tracking-tight">
+                    0
+                  </span>
+
+                  <span class="ml-1 text-sm text-muted">
+                    题
+                  </span>
+                </div>
+
+                <span
+                  id="todayStatus"
+                  class="rounded-full bg-[#f1f0ec]
+                         px-2.5 py-1 text-[11px] text-muted">
+                  未完成
+                </span>
+
+              </div>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft">
+
+              <div class="text-xs text-muted">
+                连续打卡
+              </div>
+
+              <div class="mt-3">
+
+                <span
+                  id="streakCount"
+                  class="text-3xl font-semibold tracking-tight">
+                  0
+                </span>
+
+                <span class="ml-1 text-sm text-muted">
+                  天
+                </span>
+
+              </div>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft">
+
+              <div class="text-xs text-muted">
+                待复习
+              </div>
+
+              <div class="mt-3">
+
+                <span
+                  id="dueReviewCount"
+                  class="text-3xl font-semibold tracking-tight">
+                  0
+                </span>
+
+                <span class="ml-1 text-sm text-muted">
+                  个考点
+                </span>
+
+              </div>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft">
+
+              <div class="text-xs text-muted">
+                累计正确率
+              </div>
+
+              <div class="mt-3">
+
+                <span
+                  id="overallAccuracy"
+                  class="text-3xl font-semibold tracking-tight">
+                  —
+                </span>
+
+              </div>
+
+            </article>
+
+          </div>
+
+          <div
+            class="grid gap-5
+                   xl:grid-cols-[1.25fr_.75fr]">
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft sm:p-6">
+
+              <div class="flex items-center justify-between">
+
+                <div>
+
+                  <h2 class="text-base font-semibold">
+                    模块掌握度
+                  </h2>
+
+                  <p class="mt-1 text-xs text-muted">
+                    根据已完成题目的实际正确率更新
+                  </p>
+
+                </div>
+
+                <button
+                  class="text-xs font-medium
+                         text-clay hover:underline"
+                  data-view-target="daily">
+                  去练习
+                </button>
+
+              </div>
+
+              <div
+                id="moduleAccuracyList"
+                class="mt-6 space-y-5">
+              </div>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-[#efece5] p-5 sm:p-6">
+
+              <div
+                class="text-xs font-medium uppercase
+                       tracking-[.13em] text-muted">
+                Next
+              </div>
+
+              <h2
+                id="nextActionTitle"
+                class="mt-3 text-xl font-semibold tracking-tight">
+                先做一次能力诊断
+              </h2>
+
+              <p
+                id="nextActionText"
+                class="mt-2 text-sm leading-6 text-muted">
+                用 9 道基础题估算你在极限、导数、积分三个模块的起点。
+              </p>
+
+              <button
+                id="nextActionBtn"
+                class="mt-6 rounded-xl bg-ink
+                       px-4 py-2.5 text-sm font-medium text-white
+                       transition hover:opacity-90">
+                开始
+              </button>
+
+            </article>
+
+          </div>
+
+          <div class="grid gap-5 lg:grid-cols-2">
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft sm:p-6">
+
+              <div class="flex items-center justify-between">
+
+                <h2 class="text-base font-semibold">
+                  薄弱考点
+                </h2>
+
+                <span class="text-xs text-muted">
+                  按错误率排序
+                </span>
+
+              </div>
+
+              <div
+                id="weakTopicList"
+                class="mt-4 space-y-2">
+              </div>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-5 shadow-soft sm:p-6">
+
+              <div class="flex items-center justify-between">
+
+                <h2 class="text-base font-semibold">
+                  最近记录
+                </h2>
+
+                <span class="text-xs text-muted">
+                  仅保存在本浏览器
+                </span>
+
+              </div>
+
+              <div
+                id="recentHistory"
+                class="mt-4 space-y-3">
+              </div>
+
+            </article>
+
+          </div>
+
+        </section>
+
+        <!-- Diagnosis -->
+        <section
+          id="view-diagnosis"
+          class="view hidden">
+
+          <div
+            id="diagnosisIntro"
+            class="max-w-3xl rounded-2xl border border-line
+                   bg-white p-6 shadow-soft sm:p-8">
+
+            <span
+              class="rounded-full bg-claySoft
+                     px-3 py-1 text-xs font-medium text-clay">
+              9 questions · about 12 min
+            </span>
+
+            <h2
+              class="mt-5 text-2xl font-semibold tracking-tight">
+              先确认起点，不急着上强度。
+            </h2>
+
+            <p
+              class="mt-3 text-sm leading-7 text-muted">
+              系统会从极限、导数、积分各取 3 道基础计算题。
+              结果用于决定每日训练的初始难度，不作为正式水平测评。
+            </p>
+
+            <div
+              id="diagnosisSummary"
+              class="mt-6 hidden rounded-xl border border-line
+                     bg-[#faf9f6] p-4 text-sm">
+            </div>
+
+            <button
+              id="startDiagnosisBtn"
+              class="mt-7 rounded-xl bg-ink
+                     px-5 py-3 text-sm font-medium text-white
+                     hover:opacity-90">
+              开始能力诊断
+            </button>
+
+          </div>
+
+          <div
+            id="diagnosisSession"
+            class="hidden">
+          </div>
+
+        </section>
+
+        <!-- Daily -->
+        <section
+          id="view-daily"
+          class="view hidden">
+
+          <div
+            id="dailyIntro"
+            class="max-w-3xl rounded-2xl border border-line
+                   bg-white p-6 shadow-soft sm:p-8">
+
+            <div class="flex flex-wrap items-center gap-2">
+
+              <span
+                class="rounded-full bg-sageSoft
+                       px-3 py-1 text-xs font-medium text-sage">
+                Daily 9
+              </span>
+
+              <span
+                id="dailyPlanHint"
+                class="text-xs text-muted">
+                根据你的薄弱模块动态分配
+              </span>
+
+            </div>
+
+            <h2
+              class="mt-5 text-2xl font-semibold tracking-tight">
+              今天的题，控制在一杯咖啡的时间里。
+            </h2>
+
+            <p
+              class="mt-3 text-sm leading-7 text-muted">
+              完成后自动打卡。答错的考点进入复习调度，
+              并在到期时生成同考点变式题，而不是重复原题。
+            </p>
+
+            <button
+              id="startDailyBtn"
+              class="mt-7 rounded-xl bg-ink
+                     px-5 py-3 text-sm font-medium text-white
+                     hover:opacity-90">
+              开始今日刷题
+            </button>
+
+          </div>
+
+          <div
+            id="dailySession"
+            class="hidden">
+          </div>
+
+        </section>
+
+        <!-- Review -->
+        <section
+          id="view-review"
+          class="view hidden space-y-5">
+
+          <div
+            class="max-w-4xl rounded-2xl border border-line
+                   bg-white p-6 shadow-soft sm:p-8">
+
+            <div
+              class="flex flex-col gap-4
+                     sm:flex-row sm:items-center sm:justify-between">
+
+              <div>
+
+                <div
+                  class="text-xs font-medium uppercase
+                         tracking-[.13em] text-muted">
+                  Spaced review
+                </div>
+
+                <h2
+                  class="mt-2 text-2xl font-semibold tracking-tight">
+                  只复习到期的薄弱考点。
+                </h2>
+
+                <p
+                  class="mt-2 text-sm leading-6 text-muted">
+                  首次做错 → 2 天后；再次做错 → 5 天后；
+                  复习连续答对 3 次 → 移出高频复习。
+                </p>
+
+              </div>
+
+              <button
+                id="startReviewBtn"
+                class="shrink-0 rounded-xl bg-ink
+                       px-5 py-3 text-sm font-medium text-white
+                       hover:opacity-90">
+                开始复习
+              </button>
+
+            </div>
+
+          </div>
+
+          <div
+            id="reviewQueueList"
+            class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          </div>
+
+          <div
+            id="reviewSession"
+            class="hidden">
+          </div>
+
+        </section>
+
+        <!-- Checkin -->
+        <section
+          id="view-checkin"
+          class="view hidden space-y-5">
+
+          <div
+            class="grid gap-5 lg:grid-cols-[.7fr_1.3fr]">
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-6 shadow-soft">
+
+              <div class="text-xs text-muted">
+                Current streak
+              </div>
+
+              <div class="mt-3">
+
+                <span
+                  id="checkinStreak"
+                  class="text-5xl font-semibold tracking-[-0.04em]">
+                  0
+                </span>
+
+                <span class="ml-2 text-sm text-muted">
+                  days
+                </span>
+
+              </div>
+
+              <p class="mt-4 text-sm leading-6 text-muted">
+                只有完成一整组“每日刷题”才计为当日打卡。
+              </p>
+
+            </article>
+
+            <article
+              class="rounded-2xl border border-line
+                     bg-white p-6 shadow-soft">
+
+              <div class="flex items-center justify-between">
+
+                <h2 class="text-base font-semibold">
+                  最近 28 天
+                </h2>
+
+                <span
+                  id="monthCheckinCount"
+                  class="text-xs text-muted">
+                  0 次打卡
+                </span>
+
+              </div>
+
+              <div
+                id="checkinGrid"
+                class="mt-5 grid grid-cols-7 gap-2">
+              </div>
+
+            </article>
+
+          </div>
+
+        </section>
+
+      </div>
+
+      <footer
+        class="border-t border-line bg-[#f1f0eb]/70">
+
+        <div
+          class="mx-auto max-w-6xl px-4 py-5
+                 text-center text-[11px] leading-5 text-muted
+                 sm:px-6 lg:px-10">
+
+          学生作品集 demo · AI 判题与解析可能出错，不作为备考依据 ·
+          所有学习数据仅保存在本浏览器 LocalStorage
+
+        </div>
+
+      </footer>
+
+    </main>
+
+  </div>
+
+  <div
+    id="toast"
+    class="pointer-events-none fixed bottom-5 left-1/2 z-50
+           -translate-x-1/2 translate-y-3
+           rounded-full border border-line bg-white
+           px-4 py-2 text-sm text-ink opacity-0
+           shadow-soft transition-all duration-200">
+  </div>
+
+  <script src="./app.js"></script>
+
 </body>
 </html>
