@@ -1,37 +1,116 @@
 (() => {
   'use strict';
 
-  const STORAGE_KEY = 'calcDaily.v1';
+  /*
+  =========================================================
+  CalcDaily Adaptive Engine v2
+  ---------------------------------------------------------
+  核心原则：
+  1) 用户看到离散 Level；后台维护连续 Ability θ。
+  2) 题目维护连续难度 b。
+  3) P(correct)=1/(1+exp(-0.9*(θ-b)))
+  4) θ' = θ + K(n) * (R-P) * W
+  5) K(n)=0.15+0.35*exp(-n/30)
+  6) 固定模式不更新 θ；自适应模式实时更新。
+  7) 当前难度为 provisional scale；未来 Anchor 通过 calibration layer 映射。
+  =========================================================
+  */
+
+  const STORAGE_KEY = 'calcDaily.v2';
+  const LEGACY_STORAGE_KEY = 'calcDaily.v1';
 
   const MODULES = {
-    limit: {
-      label: '极限',
-      color: '#c96545'
-    },
+    limit: { label: '极限', color: '#c96545' },
+    derivative: { label: '导数', color: '#627a66' },
+    integral: { label: '积分', color: '#88705c' }
+  };
 
-    derivative: {
-      label: '导数',
-      color: '#627a66'
-    },
+  const MODULE_KEYS = Object.keys(MODULES);
 
-    integral: {
-      label: '积分',
-      color: '#88705c'
+  const VIEW_META = {
+    dashboard: {
+      eyebrow: 'Overview',
+      title: '今天也只做一点点。',
+      subtitle: '用连续能力值与题目难度动态调整每天的训练。'
+    },
+    diagnosis: {
+      eyebrow: 'Placement',
+      title: '先定位，再训练。',
+      subtitle: '自适应诊断会快速寻找你的能力边界，不要求从低难度逐级作答。'
+    },
+    daily: {
+      eyebrow: 'Daily Practice',
+      title: '今天练什么，由你刚刚的表现决定。',
+      subtitle: '自适应模式会在每次作答后重新估计 Ability θ，并动态选择下一题。'
+    },
+    review: {
+      eyebrow: 'Review',
+      title: '错题不是收藏夹，是下一次训练入口。',
+      subtitle: '错题复习主要修正具体考点，对总体 Level 的影响会降低。'
+    },
+    checkin: {
+      eyebrow: 'Consistency',
+      title: '坚持记录，但不拿天数冒充能力。',
+      subtitle: '打卡只记录训练习惯，不直接参与 Level 计算。'
+    },
+    settings: {
+      eyebrow: 'Difficulty',
+      title: '你可以让系统适应你，也可以自己控制。',
+      subtitle: '动态自适应、手动起点、固定难度都保留。'
     }
   };
 
   const DEFAULT_STATE = {
-    version: 1,
+    version: 2,
 
     profile: {
       diagnosed: false,
       diagnosisCompletedAt: null,
+      placementSource: 'default',
 
-      levelByModule: {
-        limit: 1,
-        derivative: 1,
-        integral: 1
+      abilityByModule: {
+        limit: 6,
+        derivative: 6,
+        integral: 6
+      },
+
+      displayLevelByModule: {
+        limit: 6,
+        derivative: 6,
+        integral: 6
+      },
+
+      confidenceByModule: {
+        limit: 0.15,
+        derivative: 0.15,
+        integral: 0.15
+      },
+
+      effectiveAttemptsByModule: {
+        limit: 0,
+        derivative: 0,
+        integral: 0
       }
+    },
+
+    settings: {
+      difficultyMode: 'adaptive', // adaptive | fixed
+
+      manualLevels: {
+        limit: 6,
+        derivative: 6,
+        integral: 6
+      },
+
+      trainingMode: 'balanced', // balanced | foundation | sprint | challenge
+      dailyCount: 10
+    },
+
+    difficultyModel: {
+      version: 'v0-provisional',
+      calibrated: false,
+      calibrationPoints: [],
+      note: 'Soft-anchor provisional scale. Waiting for real anchor bank.'
     },
 
     stats: {
@@ -39,31 +118,17 @@
       correct: 0,
 
       byModule: {
-        limit: {
-          attempts: 0,
-          correct: 0
-        },
-
-        derivative: {
-          attempts: 0,
-          correct: 0
-        },
-
-        integral: {
-          attempts: 0,
-          correct: 0
-        }
+        limit: { attempts: 0, correct: 0 },
+        derivative: { attempts: 0, correct: 0 },
+        integral: { attempts: 0, correct: 0 }
       },
 
       byTopic: {}
     },
 
     reviews: [],
-
     history: [],
-
     checkins: [],
-
     activeSession: null,
 
     dailyMeta: {
@@ -72,397 +137,372 @@
   };
 
   let state = loadState();
-
   let currentView = 'dashboard';
-
   let apiHealthy = null;
 
-  const $ = id =>
-    document.getElementById(id);
-
-  const $$ = selector =>
-    Array.from(
-      document.querySelectorAll(selector)
-    );
+  const $ = id => document.getElementById(id);
+  const $$ = selector => Array.from(document.querySelectorAll(selector));
 
   function deepClone(obj) {
-    return JSON.parse(
-      JSON.stringify(obj)
-    );
+    return JSON.parse(JSON.stringify(obj));
   }
 
-  function loadState() {
-    try {
-      const raw =
-        localStorage.getItem(
-          STORAGE_KEY
-        );
-
-      if (!raw) {
-        return deepClone(
-          DEFAULT_STATE
-        );
-      }
-
-      const parsed =
-        JSON.parse(raw);
-
-      return {
-        ...deepClone(
-          DEFAULT_STATE
-        ),
-
-        ...parsed,
-
-        profile: {
-          ...deepClone(
-            DEFAULT_STATE.profile
-          ),
-
-          ...(parsed.profile || {})
-        },
-
-        stats: {
-          ...deepClone(
-            DEFAULT_STATE.stats
-          ),
-
-          ...(parsed.stats || {}),
-
-          byModule: {
-            ...deepClone(
-              DEFAULT_STATE.stats.byModule
-            ),
-
-            ...(
-              (parsed.stats || {})
-                .byModule || {}
-            )
-          },
-
-          byTopic: {
-            ...(
-              (parsed.stats || {})
-                .byTopic || {}
-            )
-          }
-        }
-      };
-
-    } catch (error) {
-      console.warn(
-        'LocalStorage 数据损坏，已重置。',
-        error
-      );
-
-      return deepClone(
-        DEFAULT_STATE
-      );
-    }
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
   }
 
-  function saveState() {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state)
-    );
+  function round2(n) {
+    return Math.round(Number(n) * 100) / 100;
+  }
+
+  function uid(prefix = 'id') {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
   function todayISO() {
-    const d =
-      new Date();
-
-    const y =
-      d.getFullYear();
-
-    const m =
-      String(
-        d.getMonth() + 1
-      ).padStart(
-        2,
-        '0'
-      );
-
-    const day =
-      String(
-        d.getDate()
-      ).padStart(
-        2,
-        '0'
-      );
-
-    return `${y}-${m}-${day}`;
-  }
-
-  function addDaysISO(days) {
-    const d =
-      new Date();
-
-    d.setHours(
-      12,
-      0,
-      0,
-      0
-    );
-
-    d.setDate(
-      d.getDate() +
-      days
-    );
-
-    const y =
-      d.getFullYear();
-
-    const m =
-      String(
-        d.getMonth() + 1
-      ).padStart(
-        2,
-        '0'
-      );
-
-    const day =
-      String(
-        d.getDate()
-      ).padStart(
-        2,
-        '0'
-      );
-
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 
   function dateOffsetISO(offset) {
-    const d =
-      new Date();
-
-    d.setHours(
-      12,
-      0,
-      0,
-      0
-    );
-
-    d.setDate(
-      d.getDate() +
-      offset
-    );
-
-    const y =
-      d.getFullYear();
-
-    const m =
-      String(
-        d.getMonth() + 1
-      ).padStart(
-        2,
-        '0'
-      );
-
-    const day =
-      String(
-        d.getDate()
-      ).padStart(
-        2,
-        '0'
-      );
-
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() + offset);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 
-  function formatDateCN(
-    date = new Date()
-  ) {
-    return new Intl.DateTimeFormat(
-      'zh-CN',
-      {
-        month: 'long',
-        day: 'numeric',
-        weekday: 'short'
-      }
-    ).format(date);
+  function addDaysISO(days) {
+    return dateOffsetISO(days);
   }
 
-  function uid(
-    prefix = 'q'
-  ) {
-    return (
-      `${prefix}_` +
-      `${Date.now().toString(36)}_` +
-      `${Math.random().toString(36).slice(2, 8)}`
-    );
+  function formatDateCN(date = new Date()) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: 'long',
+      day: 'numeric',
+      weekday: 'short'
+    }).format(date);
   }
 
-  function clamp(
-    n,
-    min,
-    max
-  ) {
-    return Math.min(
-      max,
-      Math.max(
-        min,
-        n
-      )
-    );
+  function formatDateTimeShort(value) {
+    if (!value) return '—';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
   }
 
-  function accuracy(
-    correct,
-    attempts
-  ) {
-    return attempts
-      ? Math.round(
-          correct /
-          attempts *
-          100
-        )
-      : null;
+  function formatReviewDate(value) {
+    if (!value) return '已完成高频复习';
+
+    const today = todayISO();
+
+    if (value < today) return `已到期 · ${value}`;
+    if (value === today) return '今天到期';
+
+    return `${value} 复习`;
   }
 
-  function escapeHTML(
-    value = ''
-  ) {
+  function escapeHTML(value = '') {
     return String(value)
-      .replaceAll(
-        '&',
-        '&amp;'
-      )
-      .replaceAll(
-        '<',
-        '&lt;'
-      )
-      .replaceAll(
-        '>',
-        '&gt;'
-      )
-      .replaceAll(
-        '"',
-        '&quot;'
-      )
-      .replaceAll(
-        "'",
-        '&#039;'
-      );
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function accuracy(correct, attempts) {
+    return attempts ? Math.round((correct / attempts) * 100) : null;
   }
 
   function moduleLabel(key) {
-    return (
-      MODULES[key]?.label ||
-      key
-    );
+    return MODULES[key]?.label || key;
   }
 
-  function topicKey(
-    question
-  ) {
-    return (
-      `${question.module}:` +
-      `${question.topic || '综合基础'}`
-    );
+  function topicKey(question) {
+    return `${question.module}:${question.topic || '综合基础'}`;
   }
 
-  async function typesetMath(
-    container = document.body
-  ) {
-    try {
-      if (
-        window.MathJax
-          ?.typesetPromise
-      ) {
-        await window.MathJax
-          .typesetPromise(
-            [container]
-          );
-      }
-
-    } catch (error) {
-      console.warn(
-        'MathJax 渲染失败',
-        error
-      );
-    }
+  function getTopicStat(module, topic) {
+    return state.stats.byTopic[`${module}:${topic}`] || null;
   }
 
   function toast(message) {
-    const el =
-      $('toast');
+    const el = $('toast');
+    if (!el) return;
 
-    if (!el) {
-      return;
-    }
+    el.textContent = message;
+    el.classList.remove('opacity-0', 'translate-y-3');
+    el.classList.add('opacity-100', 'translate-y-0');
 
-    el.textContent =
-      message;
-
-    el.classList.remove(
-      'opacity-0',
-      'translate-y-3'
-    );
-
-    el.classList.add(
-      'opacity-100',
-      'translate-y-0'
-    );
-
-    clearTimeout(
-      toast._timer
-    );
-
-    toast._timer =
-      setTimeout(
-        () => {
-          el.classList.add(
-            'opacity-0',
-            'translate-y-3'
-          );
-
-          el.classList.remove(
-            'opacity-100',
-            'translate-y-0'
-          );
-        },
-        2200
-      );
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      el.classList.add('opacity-0', 'translate-y-3');
+      el.classList.remove('opacity-100', 'translate-y-0');
+    }, 2200);
   }
 
-  async function apiCall(
-    action,
-    payload = {}
-  ) {
-    const response =
-      await fetch(
-        '/api/deepseek',
-        {
-          method: 'POST',
+  /*
+  =========================================================
+  Storage + migration
+  =========================================================
+  */
 
-          headers: {
-            'Content-Type':
-              'application/json'
-          },
+  function mergeState(parsed) {
+    const base = deepClone(DEFAULT_STATE);
 
-          body:
-            JSON.stringify({
-              action,
-              ...payload
-            })
+    return {
+      ...base,
+      ...parsed,
+
+      profile: {
+        ...base.profile,
+        ...(parsed.profile || {}),
+        abilityByModule: {
+          ...base.profile.abilityByModule,
+          ...((parsed.profile || {}).abilityByModule || {})
+        },
+        displayLevelByModule: {
+          ...base.profile.displayLevelByModule,
+          ...((parsed.profile || {}).displayLevelByModule || {})
+        },
+        confidenceByModule: {
+          ...base.profile.confidenceByModule,
+          ...((parsed.profile || {}).confidenceByModule || {})
+        },
+        effectiveAttemptsByModule: {
+          ...base.profile.effectiveAttemptsByModule,
+          ...((parsed.profile || {}).effectiveAttemptsByModule || {})
         }
-      );
+      },
 
-    const data =
-      await response
-        .json()
-        .catch(
-          () => ({})
-        );
+      settings: {
+        ...base.settings,
+        ...(parsed.settings || {}),
+        manualLevels: {
+          ...base.settings.manualLevels,
+          ...((parsed.settings || {}).manualLevels || {})
+        }
+      },
 
-    if (
-      !response.ok
-    ) {
-      throw new Error(
-        data.error ||
-        `AI 请求失败 (${response.status})`
-      );
+      difficultyModel: {
+        ...base.difficultyModel,
+        ...(parsed.difficultyModel || {})
+      },
+
+      stats: {
+        ...base.stats,
+        ...(parsed.stats || {}),
+        byModule: {
+          ...base.stats.byModule,
+          ...((parsed.stats || {}).byModule || {})
+        },
+        byTopic: {
+          ...((parsed.stats || {}).byTopic || {})
+        }
+      },
+
+      reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
+      history: Array.isArray(parsed.history) ? parsed.history : [],
+      checkins: Array.isArray(parsed.checkins) ? parsed.checkins : []
+    };
+  }
+
+  function migrateLegacyState(legacy) {
+    const next = deepClone(DEFAULT_STATE);
+
+    next.profile.diagnosed = Boolean(legacy?.profile?.diagnosed);
+    next.profile.diagnosisCompletedAt = legacy?.profile?.diagnosisCompletedAt || null;
+
+    MODULE_KEYS.forEach(module => {
+      const oldLevel = Number(legacy?.profile?.levelByModule?.[module]);
+      if (Number.isFinite(oldLevel)) {
+        const level = clamp(oldLevel, 1, 12);
+        next.profile.abilityByModule[module] = level;
+        next.profile.displayLevelByModule[module] = Math.round(level);
+        next.settings.manualLevels[module] = Math.round(level);
+      }
+    });
+
+    if (legacy?.stats) {
+      next.stats.attempts = Number(legacy.stats.attempts) || 0;
+      next.stats.correct = Number(legacy.stats.correct) || 0;
+
+      MODULE_KEYS.forEach(module => {
+        next.stats.byModule[module] = {
+          attempts: Number(legacy.stats.byModule?.[module]?.attempts) || 0,
+          correct: Number(legacy.stats.byModule?.[module]?.correct) || 0
+        };
+
+        next.profile.effectiveAttemptsByModule[module] =
+          next.stats.byModule[module].attempts;
+      });
+
+      next.stats.byTopic = legacy.stats.byTopic || {};
+    }
+
+    next.reviews = Array.isArray(legacy.reviews) ? legacy.reviews : [];
+    next.history = Array.isArray(legacy.history) ? legacy.history : [];
+    next.checkins = Array.isArray(legacy.checkins) ? legacy.checkins : [];
+    next.dailyMeta = legacy.dailyMeta || next.dailyMeta;
+    next.activeSession = null;
+    next.profile.placementSource = next.profile.diagnosed ? 'legacy-diagnosis' : 'legacy';
+
+    return next;
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+
+      if (raw) {
+        return mergeState(JSON.parse(raw));
+      }
+
+      const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+
+      if (legacyRaw) {
+        const migrated = migrateLegacyState(JSON.parse(legacyRaw));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+
+      return deepClone(DEFAULT_STATE);
+
+    } catch (error) {
+      console.warn('LocalStorage 数据读取失败，已使用默认状态。', error);
+      return deepClone(DEFAULT_STATE);
+    }
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  /*
+  =========================================================
+  Math rendering
+  =========================================================
+  */
+
+  async function typesetMath(container = document.body) {
+    try {
+      if (window.MathJax?.typesetPromise) {
+        if (window.MathJax.typesetClear) {
+          window.MathJax.typesetClear([container]);
+        }
+        await window.MathJax.typesetPromise([container]);
+      }
+    } catch (error) {
+      console.warn('MathJax 渲染失败', error);
+    }
+  }
+
+  function stripMathDelimiters(value = '') {
+    let s = String(value).trim();
+
+    const pairs = [
+      ['\\[', '\\]'],
+      ['\\(', '\\)'],
+      ['$$', '$$'],
+      ['$', '$']
+    ];
+
+    for (const [left, right] of pairs) {
+      if (s.startsWith(left) && s.endsWith(right)) {
+        s = s.slice(left.length, -right.length).trim();
+      }
+    }
+
+    return s;
+  }
+
+  function hasMathDelimiter(text = '') {
+    return /\\\(|\\\[|\$\$|(^|[^\\])\$/.test(String(text));
+  }
+
+  function hasRawLatex(text = '') {
+    return /\\(?:lim|frac|dfrac|tfrac|int|sum|prod|sqrt|sin|cos|tan|cot|sec|csc|ln|log|exp|to|infty|partial|cdot|times|left|right|begin|end)/.test(String(text));
+  }
+
+  function smartRichMathHTML(value = '') {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    if (hasMathDelimiter(raw)) {
+      return `<div class="math-inline-wrap">${escapeHTML(raw).replace(/\n/g, '<br>')}</div>`;
+    }
+
+    if (hasRawLatex(raw)) {
+      const firstCommand = raw.search(/\\(?:lim|frac|dfrac|tfrac|int|sum|prod|sqrt|sin|cos|tan|ln|log|exp|partial)/);
+      const colonIndex = Math.max(raw.lastIndexOf('：', firstCommand), raw.lastIndexOf(':', firstCommand));
+
+      if (colonIndex >= 0 && firstCommand > colonIndex) {
+        const prefix = raw.slice(0, colonIndex + 1);
+        const expression = raw.slice(colonIndex + 1).trim();
+
+        return `
+          <div>${escapeHTML(prefix)}</div>
+          <div class="math-block">\\[${escapeHTML(stripMathDelimiters(expression))}\\]</div>
+        `;
+      }
+
+      return `<div class="math-block">\\[${escapeHTML(stripMathDelimiters(raw))}\\]</div>`;
+    }
+
+    return `<div>${escapeHTML(raw).replace(/\n/g, '<br>')}</div>`;
+  }
+
+  function questionPromptHTML(question) {
+    if (question?.instruction && question?.expression) {
+      return `
+        <div class="text-[15px] leading-7 text-ink sm:text-base">
+          ${escapeHTML(question.instruction)}
+        </div>
+        <div class="math-block mt-3 text-lg sm:text-xl">
+          \\[${escapeHTML(stripMathDelimiters(question.expression))}\\]
+        </div>
+      `;
+    }
+
+    return smartRichMathHTML(question?.prompt || '题目加载失败');
+  }
+
+  function answerMathHTML(answer) {
+    const value = stripMathDelimiters(answer || '');
+    if (!value) return '—';
+    return `<span class="math-inline-wrap">\\(${escapeHTML(value)}\\)</span>`;
+  }
+
+  /*
+  =========================================================
+  API
+  =========================================================
+  */
+
+  async function apiCall(action, payload = {}) {
+    const response = await fetch('/api/deepseek', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || `AI 请求失败 (${response.status})`);
     }
 
     return data;
@@ -470,436 +510,322 @@
 
   async function checkApiHealth() {
     try {
-      const res =
-        await fetch(
-          '/api/deepseek?health=1',
-          {
-            cache: 'no-store'
-          }
-        );
-
-      apiHealthy =
-        res.ok;
-
+      const res = await fetch('/api/deepseek?health=1', { cache: 'no-store' });
+      apiHealthy = res.ok;
     } catch {
-      apiHealthy =
-        false;
+      apiHealthy = false;
     }
 
     renderApiStatus();
   }
 
   function renderApiStatus() {
-    const text =
-      $('apiStatusText');
+    const text = $('apiStatusText');
+    const dot = $('apiStatusDot');
+    if (!text || !dot) return;
 
-    const dot =
-      $('apiStatusDot');
-
-    if (
-      !text ||
-      !dot
-    ) {
-      return;
-    }
-
-    if (
-      apiHealthy === true
-    ) {
-      text.textContent =
-        'DeepSeek 已连接';
-
-      dot.className =
-        'h-2 w-2 rounded-full bg-emerald-500';
-
-    } else if (
-      apiHealthy === false
-    ) {
-      text.textContent =
-        '未连接，使用本地备用题';
-
-      dot.className =
-        'h-2 w-2 rounded-full bg-amber-400';
-
+    if (apiHealthy === true) {
+      text.textContent = 'DeepSeek 已连接';
+      dot.className = 'h-2 w-2 rounded-full bg-emerald-500';
+    } else if (apiHealthy === false) {
+      text.textContent = '未连接，使用本地备用题';
+      dot.className = 'h-2 w-2 rounded-full bg-amber-400';
     } else {
-      text.textContent =
-        '检测中';
-
-      dot.className =
-        'h-2 w-2 rounded-full bg-amber-400';
+      text.textContent = '检测中';
+      dot.className = 'h-2 w-2 rounded-full bg-amber-400';
     }
   }
 
   /*
   =========================================================
-  本地备用题
+  Difficulty model
   =========================================================
   */
 
-  const FALLBACK_BANK = [
-    {
-      module: 'limit',
-      topic: '等价无穷小',
-      difficulty: 1,
-
-      prompt:
-        '计算极限：\\(\\lim_{x\\to 0} \\frac{\\sin 3x}{x}\\)',
-
-      answer:
-        '3',
-
-      solution:
-        '利用 \\(\\sin u \\sim u\\)：\\(\\sin 3x \\sim 3x\\)，因此极限为 \\(3\\)。'
-    },
-
-    {
-      module: 'limit',
-      topic: '重要极限',
-      difficulty: 2,
-
-      prompt:
-        '计算极限：\\(\\lim_{x\\to 0} \\frac{1-\\cos x}{x^2}\\)',
-
-      answer:
-        '1/2',
-
-      solution:
-        '利用 \\(1-\\cos x=2\\sin^2(x/2)\\)，得到极限 \\(\\frac12\\)。'
-    },
-
-    {
-      module: 'limit',
-      topic: '洛必达法则',
-      difficulty: 2,
-
-      prompt:
-        '计算极限：\\(\\lim_{x\\to 0} \\frac{e^x-1-x}{x^2}\\)',
-
-      answer:
-        '1/2',
-
-      solution:
-        '利用泰勒展开 \\(e^x=1+x+\\frac{x^2}{2}+o(x^2)\\)，故极限为 \\(\\frac12\\)。'
-    },
-
-    {
-      module: 'derivative',
-      topic: '复合函数求导',
-      difficulty: 1,
-
-      prompt:
-        '求导：\\(y=\\ln(1+x^2)\\)',
-
-      answer:
-        '2x/(1+x^2)',
-
-      solution:
-        '链式法则：\\(y\\prime=\\frac{1}{1+x^2}\\cdot2x=\\frac{2x}{1+x^2}\\)。'
-    },
-
-    {
-      module: 'derivative',
-      topic: '乘积法则',
-      difficulty: 2,
-
-      prompt:
-        '求导：\\(y=x^2e^x\\)',
-
-      answer:
-        'e^x(x^2+2x)',
-
-      solution:
-        '乘积法则：\\(y\\prime=2xe^x+x^2e^x=e^x(x^2+2x)\\)。'
-    },
-
-    {
-      module: 'derivative',
-      topic: '隐函数求导',
-      difficulty: 2,
-
-      prompt:
-        '已知 \\(x^2+y^2=1\\)，求 \\(\\frac{dy}{dx}\\)。',
-
-      answer:
-        '-x/y',
-
-      solution:
-        '两边对 \\(x\\) 求导：\\(2x+2yy\\prime=0\\)，故 \\(y\\prime=-x/y\\)。'
-    },
-
-    {
-      module: 'integral',
-      topic: '基本积分',
-      difficulty: 1,
-
-      prompt:
-        '计算不定积分：\\(\\int (3x^2+2x)\\,dx\\)',
-
-      answer:
-        'x^3+x^2+C',
-
-      solution:
-        '逐项积分得到 \\(x^3+x^2+C\\)。'
-    },
-
-    {
-      module: 'integral',
-      topic: '换元积分',
-      difficulty: 2,
-
-      prompt:
-        '计算不定积分：\\(\\int 2x\\cos(x^2)\\,dx\\)',
-
-      answer:
-        'sin(x^2)+C',
-
-      solution:
-        '令 \\(u=x^2\\)，则 \\(du=2x\\,dx\\)，积分为 \\(\\sin u+C=\\sin(x^2)+C\\)。'
-    },
-
-    {
-      module: 'integral',
-      topic: '分部积分',
-      difficulty: 2,
-
-      prompt:
-        '计算不定积分：\\(\\int xe^x\\,dx\\)',
-
-      answer:
-        'e^x(x-1)+C',
-
-      solution:
-        '分部积分：取 \\(u=x,dv=e^x dx\\)，得 \\(xe^x-e^x+C=e^x(x-1)+C\\)。'
-    }
-  ];
-
-  function buildFallbackQuestions({
-    count = 9,
-
-    modules = [
-      'limit',
-      'derivative',
-      'integral'
-    ],
-
-    topics = []
-
-  } = {}) {
-
-    let pool =
-      FALLBACK_BANK.filter(
-        q =>
-          modules.includes(
-            q.module
-          )
-      );
-
-    if (
-      topics.length
-    ) {
-      const topicSet =
-        new Set(topics);
-
-      const matched =
-        pool.filter(
-          q =>
-            topicSet.has(
-              q.topic
-            )
-        );
-
-      if (
-        matched.length
-      ) {
-        pool = [
-          ...matched,
-
-          ...pool.filter(
-            q =>
-              !topicSet.has(
-                q.topic
-              )
-          )
-        ];
-      }
-    }
-
-    const result = [];
-
-    for (
-      let i = 0;
-      i < count;
-      i++
-    ) {
-      const base =
-        pool[
-          i %
-          pool.length
-        ];
-
-      result.push({
-        ...base,
-
-        id:
-          uid('fallback'),
-
-        source:
-          'fallback'
-      });
-    }
-
-    return result;
+  function correctProbability(theta, difficulty) {
+    return 1 / (1 + Math.exp(-0.9 * (theta - difficulty)));
   }
 
-  async function generateQuestions(
-    options
-  ) {
-    try {
-      const data =
-        await apiCall(
-          'generate',
-          options
-        );
+  function learningRate(effectiveAttempts) {
+    return 0.15 + 0.35 * Math.exp(-(Number(effectiveAttempts) || 0) / 30);
+  }
 
-      if (
-        !Array.isArray(
-          data.questions
-        ) ||
-        !data.questions.length
-      ) {
-        throw new Error(
-          'AI 返回题目为空'
-        );
-      }
+  function difficultyWeight(purpose) {
+    if (purpose === 'diagnosis') return 1.2;
+    if (purpose === 'review') return 0.6;
+    return 1;
+  }
 
-      apiHealthy =
-        true;
+  function topicWeight(purpose) {
+    if (purpose === 'review') return 1;
+    if (purpose === 'diagnosis') return 0;
+    return 0.85;
+  }
 
-      renderApiStatus();
+  function piecewiseMap(value, points) {
+    const x = Number(value);
+    if (!Number.isFinite(x)) return value;
+    if (!Array.isArray(points) || points.length < 2) return x;
 
-      return data.questions.map(
-        q => ({
-          id:
-            q.id ||
-            uid('ai'),
+    const sorted = points
+      .map(p => ({
+        provisional: Number(p.provisional),
+        real: Number(p.real)
+      }))
+      .filter(p => Number.isFinite(p.provisional) && Number.isFinite(p.real))
+      .sort((a, b) => a.provisional - b.provisional);
 
-          module:
-            [
-              'limit',
-              'derivative',
-              'integral'
-            ].includes(
-              q.module
-            )
-              ? q.module
-              : 'limit',
+    if (sorted.length < 2) return x;
 
-          topic:
-            q.topic ||
-            '综合基础',
-
-          difficulty:
-            clamp(
-              Number(
-                q.difficulty
-              ) || 1,
-              1,
-              5
-            ),
-
-          prompt:
-            q.prompt ||
-            '',
-
-          answer:
-            q.answer ||
-            '',
-
-          solution:
-            q.solution ||
-            '',
-
-          keySteps:
-            Array.isArray(
-              q.keySteps
-            )
-              ? q.keySteps
-              : [],
-
-          source:
-            'ai'
-        })
-      );
-
-    } catch (error) {
-      console.warn(
-        error
-      );
-
-      apiHealthy =
-        false;
-
-      renderApiStatus();
-
-      toast(
-        'AI 暂不可用，已切换到本地备用题'
-      );
-
-      return buildFallbackQuestions(
-        options
-      );
+    if (x <= sorted[0].provisional) {
+      const a = sorted[0];
+      const b = sorted[1];
+      const slope = (b.real - a.real) / (b.provisional - a.provisional || 1);
+      return a.real + slope * (x - a.provisional);
     }
+
+    if (x >= sorted[sorted.length - 1].provisional) {
+      const a = sorted[sorted.length - 2];
+      const b = sorted[sorted.length - 1];
+      const slope = (b.real - a.real) / (b.provisional - a.provisional || 1);
+      return b.real + slope * (x - b.provisional);
+    }
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+
+      if (x >= a.provisional && x <= b.provisional) {
+        const t = (x - a.provisional) / (b.provisional - a.provisional || 1);
+        return a.real + t * (b.real - a.real);
+      }
+    }
+
+    return x;
+  }
+
+  function calibrateDifficulty(provisionalDifficulty) {
+    const model = state.difficultyModel;
+
+    if (!model.calibrated || !Array.isArray(model.calibrationPoints) || model.calibrationPoints.length < 2) {
+      return clamp(Number(provisionalDifficulty) || 6, 1, 13.5);
+    }
+
+    return clamp(
+      piecewiseMap(provisionalDifficulty, model.calibrationPoints),
+      1,
+      13.5
+    );
+  }
+
+  function displayLevelLabel(module) {
+    if (state.settings.difficultyMode === 'fixed') {
+      return `Lv.${state.settings.manualLevels[module]}`;
+    }
+
+    const ability = Number(state.profile.abilityByModule[module]) || 6;
+
+    if (ability >= 12.65) {
+      return 'Lv.12+';
+    }
+
+    return `Lv.${state.profile.displayLevelByModule[module] || Math.round(ability)}`;
+  }
+
+  function syncDisplayLevel(module, force = false) {
+    const theta = Number(state.profile.abilityByModule[module]) || 6;
+
+    if (force) {
+      state.profile.displayLevelByModule[module] = clamp(Math.round(theta), 1, 12);
+      return;
+    }
+
+    let current = clamp(
+      Number(state.profile.displayLevelByModule[module]) || Math.round(theta),
+      1,
+      12
+    );
+
+    while (current < 12 && theta >= current + 0.65) {
+      current += 1;
+    }
+
+    while (current > 1 && theta <= current - 0.65) {
+      current -= 1;
+    }
+
+    state.profile.displayLevelByModule[module] = current;
+  }
+
+  function updateAbility(module, difficulty, correct, purpose = 'daily') {
+    const before = Number(state.profile.abilityByModule[module]) || 6;
+
+    if (state.settings.difficultyMode !== 'adaptive') {
+      return {
+        before,
+        after: before,
+        probability: correctProbability(before, difficulty),
+        k: 0,
+        weight: 0,
+        changed: false
+      };
+    }
+
+    const n = Number(state.profile.effectiveAttemptsByModule[module]) || 0;
+    const p = correctProbability(before, difficulty);
+    const k = learningRate(n);
+    const w = difficultyWeight(purpose);
+    const r = correct ? 1 : 0;
+
+    const after = clamp(before + k * (r - p) * w, 1, 13.5);
+
+    state.profile.abilityByModule[module] = round2(after);
+    state.profile.effectiveAttemptsByModule[module] = n + w;
+
+    const baseConfidence = 1 - Math.exp(-(n + w) / 18);
+    state.profile.confidenceByModule[module] = round2(
+      clamp(Math.max(state.profile.confidenceByModule[module] || 0.15, baseConfidence), 0.15, 0.98)
+    );
+
+    syncDisplayLevel(module);
+
+    return {
+      before: round2(before),
+      after: round2(after),
+      probability: round2(p),
+      k: round2(k),
+      weight: w,
+      changed: Math.abs(after - before) > 0.0001
+    };
+  }
+
+  function updateTopicMastery(question, correct, purpose = 'daily') {
+    if (purpose === 'diagnosis') return null;
+
+    const key = topicKey(question);
+    const existing = state.stats.byTopic[key] || {
+      module: question.module,
+      topic: question.topic || '综合基础',
+      attempts: 0,
+      correct: 0,
+      ability: Number(state.profile.abilityByModule[question.module]) || 6,
+      confidence: 0.15,
+      lastAttemptAt: null
+    };
+
+    const b = Number(question.calibratedDifficulty ?? question.provisionalDifficulty ?? question.difficulty) || 6;
+    const before = Number(existing.ability) || Number(state.profile.abilityByModule[question.module]) || 6;
+    const n = Number(existing.attempts) || 0;
+    const p = correctProbability(before, b);
+    const k = 0.18 + 0.32 * Math.exp(-n / 18);
+    const w = topicWeight(purpose);
+    const r = correct ? 1 : 0;
+    const after = clamp(before + k * (r - p) * w, 1, 13.5);
+
+    existing.attempts += 1;
+    if (correct) existing.correct += 1;
+    existing.ability = round2(after);
+    existing.confidence = round2(clamp(1 - Math.exp(-existing.attempts / 12), 0.15, 0.98));
+    existing.lastAttemptAt = new Date().toISOString();
+
+    state.stats.byTopic[key] = existing;
+
+    return {
+      before: round2(before),
+      after: round2(after)
+    };
   }
 
   /*
   =========================================================
-  新版答案判定
+  Calibration hook for future real anchors
+  =========================================================
+  */
+
+  function applyCalibrationModel(points, version = 'v1-anchor') {
+    if (!Array.isArray(points) || points.length < 2) {
+      throw new Error('至少需要两个 calibration points。');
+    }
+
+    const cleanPoints = points
+      .map(p => ({
+        provisional: Number(p.provisional),
+        real: Number(p.real)
+      }))
+      .filter(p => Number.isFinite(p.provisional) && Number.isFinite(p.real))
+      .sort((a, b) => a.provisional - b.provisional);
+
+    if (cleanPoints.length < 2) {
+      throw new Error('有效 calibration points 不足。');
+    }
+
+    MODULE_KEYS.forEach(module => {
+      state.profile.abilityByModule[module] = round2(
+        clamp(piecewiseMap(state.profile.abilityByModule[module], cleanPoints), 1, 13.5)
+      );
+      syncDisplayLevel(module, true);
+    });
+
+    state.history = state.history.map(item => ({
+      ...item,
+      calibratedDifficulty:
+        Number.isFinite(Number(item.provisionalDifficulty))
+          ? round2(clamp(piecewiseMap(item.provisionalDifficulty, cleanPoints), 1, 13.5))
+          : item.calibratedDifficulty
+    }));
+
+    state.reviews = state.reviews.map(item => ({
+      ...item,
+      calibratedDifficulty:
+        Number.isFinite(Number(item.provisionalDifficulty))
+          ? round2(clamp(piecewiseMap(item.provisionalDifficulty, cleanPoints), 1, 13.5))
+          : item.calibratedDifficulty
+    }));
+
+    state.difficultyModel = {
+      version,
+      calibrated: true,
+      calibrationPoints: cleanPoints,
+      note: 'Calibrated with external anchor bank.'
+    };
+
+    saveState();
+    renderAll();
+  }
+
+  function resetCalibrationModel() {
+    state.difficultyModel = deepClone(DEFAULT_STATE.difficultyModel);
+    saveState();
+    renderAll();
+  }
+
+  window.CalcDailyCalibration = {
+    apply: applyCalibrationModel,
+    reset: resetCalibrationModel,
+    exportData() {
+      return {
+        difficultyModel: deepClone(state.difficultyModel),
+        history: deepClone(state.history),
+        profile: deepClone(state.profile)
+      };
+    }
+  };
+
+  /*
+  =========================================================
+  Answer normalization + judge
   =========================================================
   */
 
   const CHINESE_DIGITS = {
-    零: 0,
-    〇: 0,
-    一: 1,
-    二: 2,
-    两: 2,
-    三: 3,
-    四: 4,
-    五: 5,
-    六: 6,
-    七: 7,
-    八: 8,
-    九: 9
+    零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+    五: 5, 六: 6, 七: 7, 八: 8, 九: 9
   };
 
-  /*
-    将常见中文数字转成数字。
+  function chineseIntegerToNumber(text) {
+    if (!text) return null;
 
-    支持：
-    一
-    二
-    十
-    十二
-    二十
-    二十五
-    一百
-    一百二十
-    一百二十三
-  */
-
-  function chineseIntegerToNumber(
-    text
-  ) {
-    if (
-      !text
-    ) {
-      return null;
-    }
-
-    if (
-      /^[零〇一二两三四五六七八九]$/
-        .test(text)
-    ) {
+    if (/^[零〇一二两三四五六七八九]$/.test(text)) {
       return CHINESE_DIGITS[text];
     }
 
@@ -907,3976 +833,2814 @@
     let current = 0;
     let seen = false;
 
-    for (
-      const char
-      of text
-    ) {
-      if (
-        char in
-        CHINESE_DIGITS
-      ) {
-        current =
-          CHINESE_DIGITS[
-            char
-          ];
-
-        seen =
-          true;
-
+    for (const char of text) {
+      if (char in CHINESE_DIGITS) {
+        current = CHINESE_DIGITS[char];
+        seen = true;
         continue;
       }
 
-      if (
-        char === '十'
-      ) {
-        seen =
-          true;
-
-        total +=
-          (
-            current ||
-            1
-          ) *
-          10;
-
-        current =
-          0;
-
+      if (char === '十') {
+        seen = true;
+        total += (current || 1) * 10;
+        current = 0;
         continue;
       }
 
-      if (
-        char === '百'
-      ) {
-        seen =
-          true;
-
-        total +=
-          (
-            current ||
-            1
-          ) *
-          100;
-
-        current =
-          0;
-
+      if (char === '百') {
+        seen = true;
+        total += (current || 1) * 100;
+        current = 0;
         continue;
       }
 
       return null;
     }
 
-    if (
-      !seen
-    ) {
-      return null;
-    }
-
-    return (
-      total +
-      current
-    );
+    return seen ? total + current : null;
   }
 
-  function replaceChineseFractions(
-    input
-  ) {
-    let s =
-      String(input);
+  function replaceChineseFractions(input) {
+    let s = String(input);
 
-    /*
-      例如：
+    s = s.replace(
+      /([零〇一二两三四五六七八九十百]+)分之([零〇一二两三四五六七八九十百]+)/g,
+      (match, denominatorText, numeratorText) => {
+        const denominator = chineseIntegerToNumber(denominatorText);
+        const numerator = chineseIntegerToNumber(numeratorText);
 
-      二分之一
-      ↓
-      1/2
-
-      三分之二
-      ↓
-      2/3
-
-      百分之五十
-      ↓
-      50/100
-    */
-
-    s =
-      s.replace(
-        /([零〇一二两三四五六七八九十百]+)分之([零〇一二两三四五六七八九十百]+)/g,
-
-        (
-          match,
-          denominatorText,
-          numeratorText
-        ) => {
-          const denominator =
-            chineseIntegerToNumber(
-              denominatorText
-            );
-
-          const numerator =
-            chineseIntegerToNumber(
-              numeratorText
-            );
-
-          if (
-            denominator === null ||
-            numerator === null ||
-            denominator === 0
-          ) {
-            return match;
-          }
-
-          return (
-            `${numerator}/${denominator}`
-          );
+        if (denominator === null || numerator === null || denominator === 0) {
+          return match;
         }
-      );
 
-    s =
-      s.replace(
-        /一半/g,
-        '1/2'
-      );
-
-    return s;
-  }
-
-  function convertLatexFractions(
-    input
-  ) {
-    let s =
-      input;
-
-    /*
-      \frac{1}{2}
-      ↓
-      (1)/(2)
-    */
-
-    for (
-      let i = 0;
-      i < 4;
-      i++
-    ) {
-      const before =
-        s;
-
-      s =
-        s.replace(
-          /\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
-          '($1)/($2)'
-        );
-
-      if (
-        before === s
-      ) {
-        break;
+        return `${numerator}/${denominator}`;
       }
+    );
+
+    return s.replace(/一半/g, '1/2');
+  }
+
+  function convertLatexFractions(input) {
+    let s = input;
+
+    for (let i = 0; i < 4; i++) {
+      const before = s;
+
+      s = s.replace(
+        /\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        '($1)/($2)'
+      );
+
+      if (before === s) break;
     }
 
     return s;
   }
 
-  function normalizeAnswer(
-    value = ''
-  ) {
-    let s =
-      String(value)
-        .toLowerCase();
+  function normalizeAnswer(value = '') {
+    let s = String(value).toLowerCase();
 
-    /*
-      Unicode / invisible spaces
-    */
+    s = s.replace(
+      /[\u00A0\u1680\u180E\u2000-\u200D\u202F\u205F\u2060\u3000\uFEFF]/g,
+      ''
+    );
 
-    s =
-      s.replace(
-        /[\u00A0\u1680\u180E\u2000-\u200D\u202F\u205F\u2060\u3000\uFEFF]/g,
-        ''
-      );
+    s = s
+      .replace(/（/g, '(')
+      .replace(/）/g, ')')
+      .replace(/＋/g, '+')
+      .replace(/[－−–—]/g, '-')
+      .replace(/×/g, '*')
+      .replace(/[÷／]/g, '/')
+      .replace(/，/g, ',')
+      .replace(/。/g, '')
+      .replace(/²/g, '^2')
+      .replace(/³/g, '^3')
+      .replace(/½/g, '1/2')
+      .replace(/⅓/g, '1/3')
+      .replace(/⅔/g, '2/3')
+      .replace(/¼/g, '1/4')
+      .replace(/¾/g, '3/4');
 
-    /*
-      中文 / 全角符号
-    */
+    s = replaceChineseFractions(s);
 
-    s =
-      s
-        .replace(
-          /（/g,
-          '('
-        )
+    s = s
+      .replace(/\\left/g, '')
+      .replace(/\\right/g, '')
+      .replace(/\\,/g, '')
+      .replace(/\\!/g, '')
+      .replace(/\\;/g, '')
+      .replace(/\\:/g, '')
+      .replace(/\\cdot/g, '*')
+      .replace(/\\times/g, '*');
 
-        .replace(
-          /）/g,
-          ')'
-        )
+    s = convertLatexFractions(s);
 
-        .replace(
-          /＋/g,
-          '+'
-        )
-
-        .replace(
-          /[－−–—]/g,
-          '-'
-        )
-
-        .replace(
-          /×/g,
-          '*'
-        )
-
-        .replace(
-          /÷/g,
-          '/'
-        )
-
-        .replace(
-          /，/g,
-          ','
-        )
-
-        .replace(
-          /。/g,
-          ''
-        );
-
-    /*
-      Unicode 常用数学字符
-    */
-
-    s =
-      s
-        .replace(
-          /²/g,
-          '^2'
-        )
-
-        .replace(
-          /³/g,
-          '^3'
-        )
-
-        .replace(
-          /½/g,
-          '1/2'
-        )
-
-        .replace(
-          /⅓/g,
-          '1/3'
-        )
-
-        .replace(
-          /⅔/g,
-          '2/3'
-        )
-
-        .replace(
-          /¼/g,
-          '1/4'
-        )
-
-        .replace(
-          /¾/g,
-          '3/4'
-        );
-
-    /*
-      中文分数
-    */
-
-    s =
-      replaceChineseFractions(
-        s
-      );
-
-    /*
-      LaTeX
-    */
-
-    s =
-      s
-        .replace(
-          /\\left/g,
-          ''
-        )
-
-        .replace(
-          /\\right/g,
-          ''
-        )
-
-        .replace(
-          /\\,/g,
-          ''
-        )
-
-        .replace(
-          /\\!/g,
-          ''
-        )
-
-        .replace(
-          /\\;/g,
-          ''
-        )
-
-        .replace(
-          /\\:/g,
-          ''
-        )
-
-        .replace(
-          /\\cdot/g,
-          '*'
-        )
-
-        .replace(
-          /\\times/g,
-          '*'
-        );
-
-    s =
-      convertLatexFractions(
-        s
-      );
-
-    /*
-      sqrt
-    */
-
-    s =
-      s.replace(
-        /\\sqrt\s*\{([^{}]+)\}/g,
-        'sqrt($1)'
-      );
-
-    /*
-      剩余的大括号
-    */
-
-    s =
-      s
-        .replace(
-          /\{/g,
-          '('
-        )
-
-        .replace(
-          /\}/g,
-          ')'
-        );
-
-    /*
-      普通空格
-    */
-
-    s =
-      s.replace(
-        /\s+/g,
-        ''
-      );
-
-    /*
-      常见数学名称
-    */
-
-    s =
-      s
-        .replace(
-          /\\sin/g,
-          'sin'
-        )
-
-        .replace(
-          /\\cos/g,
-          'cos'
-        )
-
-        .replace(
-          /\\tan/g,
-          'tan'
-        )
-
-        .replace(
-          /\\ln/g,
-          'ln'
-        )
-
-        .replace(
-          /\\log/g,
-          'log'
-        )
-
-        .replace(
-          /\\exp/g,
-          'exp'
-        );
-
-    /*
-      结尾标点
-    */
-
-    s =
-      s.replace(
-        /[;,，。]+$/g,
-        ''
-      );
+    s = s
+      .replace(/\\sqrt\s*\{([^{}]+)\}/g, 'sqrt($1)')
+      .replace(/\\ln/g, 'ln')
+      .replace(/\\log/g, 'log')
+      .replace(/\\sin/g, 'sin')
+      .replace(/\\cos/g, 'cos')
+      .replace(/\\tan/g, 'tan')
+      .replace(/\s+/g, '')
+      .replace(/[{}]/g, '');
 
     return s;
   }
 
-  function unwrapNumericParentheses(
-    value
-  ) {
-    let s =
-      value;
+  function parseSimpleNumericAnswer(value) {
+    const s = normalizeAnswer(value);
 
-    /*
-      (1)/(2)
-      ↓
-      1/2
-    */
-
-    s =
-      s.replace(
-        /^\((-?\d+(?:\.\d+)?)\)\/\((-?\d+(?:\.\d+)?)\)$/,
-        '$1/$2'
-      );
-
-    /*
-      (0.5)
-      ↓
-      0.5
-    */
-
-    s =
-      s.replace(
-        /^\((-?\d+(?:\.\d+)?)\)$/,
-        '$1'
-      );
-
-    return s;
-  }
-
-  function parseSimpleNumericAnswer(
-    value = ''
-  ) {
-    let s =
-      normalizeAnswer(
-        value
-      );
-
-    s =
-      unwrapNumericParentheses(
-        s
-      );
-
-    if (
-      !s
-    ) {
-      return null;
+    if (/^-?\d+(\.\d+)?%$/.test(s)) {
+      return Number(s.slice(0, -1)) / 100;
     }
 
-    /*
-      百分数
-    */
-
-    if (
-      /^-?\d+(?:\.\d+)?%$/
-        .test(s)
-    ) {
-      return (
-        Number(
-          s.slice(
-            0,
-            -1
-          )
-        ) /
-        100
-      );
-    }
-
-    /*
-      简单分数
-    */
-
-    const fractionMatch =
-      s.match(
-        /^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/
-      );
-
-    if (
-      fractionMatch
-    ) {
-      const numerator =
-        Number(
-          fractionMatch[1]
-        );
-
-      const denominator =
-        Number(
-          fractionMatch[2]
-        );
-
-      if (
-        denominator !== 0
-      ) {
-        return (
-          numerator /
-          denominator
-        );
-      }
-    }
-
-    /*
-      普通数字
-    */
-
-    if (
-      /^-?\d+(?:\.\d+)?$/
-        .test(s)
-    ) {
+    if (/^-?\d+(\.\d+)?$/.test(s)) {
       return Number(s);
+    }
+
+    const fraction = s.match(/^\(?(-?\d+(?:\.\d+)?)\)?\/\(?(-?\d+(?:\.\d+)?)\)?$/);
+
+    if (fraction) {
+      const denominator = Number(fraction[2]);
+      if (denominator !== 0) {
+        return Number(fraction[1]) / denominator;
+      }
     }
 
     return null;
   }
 
-  function stripTrailingConstantC(
-    value
-  ) {
-    return value
-      .replace(
-        /\+c$/i,
-        ''
-      )
-      .replace(
-        /c\+$/i,
-        ''
-      );
+  function stripIntegrationConstant(value) {
+    return normalizeAnswer(value)
+      .replace(/\+c$/i, '')
+      .replace(/-c$/i, '');
   }
 
-  function locallyEquivalent(
-    userAnswer,
-    standardAnswer
-  ) {
-    const a =
-      normalizeAnswer(
-        userAnswer
-      );
+  function locallyEquivalent(a, b) {
+    const na = normalizeAnswer(a);
+    const nb = normalizeAnswer(b);
 
-    const b =
-      normalizeAnswer(
-        standardAnswer
-      );
+    if (na === nb) return true;
 
-    if (
-      !a ||
-      !b
-    ) {
-      return false;
-    }
+    const va = parseSimpleNumericAnswer(a);
+    const vb = parseSimpleNumericAnswer(b);
 
-    /*
-      1.
-      标准化之后完全一致。
-
-      例如：
-
-      2x/ (1+x^2)
-
-      与
-
-      2x/(1+x^2)
-    */
-
-    if (
-      a === b
-    ) {
+    if (va !== null && vb !== null && Math.abs(va - vb) < 1e-10) {
       return true;
     }
 
-    /*
-      2.
-      数值等价。
-
-      例如：
-
-      1/2
-      二分之一
-      0.5
-      50%
-    */
-
-    const numA =
-      parseSimpleNumericAnswer(
-        a
-      );
-
-    const numB =
-      parseSimpleNumericAnswer(
-        b
-      );
-
-    if (
-      numA !== null &&
-      numB !== null
-    ) {
-      return (
-        Math.abs(
-          numA -
-          numB
-        ) <
-        1e-10
-      );
-    }
-
-    /*
-      3.
-      不定积分 +C
-
-      demo 中允许只差
-      积分常数写法。
-    */
-
-    const withoutCA =
-      stripTrailingConstantC(
-        a
-      );
-
-    const withoutCB =
-      stripTrailingConstantC(
-        b
-      );
-
-    if (
-      withoutCA ===
-      withoutCB
-    ) {
+    if (stripIntegrationConstant(a) === stripIntegrationConstant(b)) {
       return true;
     }
 
     return false;
   }
 
-  async function judgeAnswer(
-    question,
-    userAnswer
-  ) {
-    if (
-      !String(
-        userAnswer ||
-        ''
-      ).trim()
-    ) {
+  async function judgeAnswer(question, userAnswer) {
+    if (!String(userAnswer || '').trim()) {
       return {
         correct: false,
-        feedback:
-          '你还没有填写答案。'
+        feedback: '答案不能为空。'
       };
     }
 
-    /*
-      第一层：
-
-      本地确定性判题。
-
-      能确认就直接判对，
-      不浪费 API。
-    */
-
-    if (
-      locallyEquivalent(
-        userAnswer,
-        question.answer
-      )
-    ) {
+    if (locallyEquivalent(userAnswer, question.answer)) {
       return {
         correct: true,
-
-        feedback:
-          '答案与参考答案等价。'
+        feedback: '与参考答案数学等价。'
       };
     }
 
-    /*
-      第二层：
-
-      DeepSeek 判断数学等价。
-
-      不再要求字符串完全一致。
-    */
-
     try {
-      const data =
-        await apiCall(
-          'judge',
-          {
-            question: {
-              module:
-                question.module,
+      const result = await apiCall('judge', {
+        question,
+        userAnswer
+      });
 
-              topic:
-                question.topic,
+      apiHealthy = true;
+      renderApiStatus();
 
-              prompt:
-                question.prompt,
+      if (typeof result.correct === 'boolean') {
+        return {
+          correct: result.correct,
+          feedback: String(result.feedback || '')
+        };
+      }
 
-              answer:
-                question.answer,
+      throw new Error('AI 判题返回格式异常');
 
-              solution:
-                question.solution
-            },
-
-            userAnswer
-          }
-        );
-
-      apiHealthy =
-        true;
-
+    } catch (error) {
+      console.warn(error);
+      apiHealthy = false;
       renderApiStatus();
 
       return {
-        correct:
-          Boolean(
-            data.correct
-          ),
-
-        feedback:
-          data.feedback ||
-          ''
+        correct: null,
+        needsManualCheck: true,
+        feedback: `当前 AI 判题服务不可用，本地规则无法确认该表达式是否数学等价。参考答案：${question.answer}`
       };
-
-    } catch (error) {
-      console.warn(
-        'AI 判题失败，本地规则无法继续确认。',
-        error
-      );
-
-      apiHealthy =
-        false;
-
-      renderApiStatus();
     }
+  }
 
-    /*
-      第三层：
+  /*
+  =========================================================
+  Fallback questions
+  =========================================================
+  */
 
-      本地无法确认，
-      AI 又没连上。
+  const FALLBACK_BANK = [
+    {
+      module: 'limit', topic: '重要极限', difficulty: 2,
+      instruction: '计算极限',
+      expression: '\\lim_{x\\to0}\\frac{\\sin 3x}{x}',
+      answer: '3',
+      solution: '利用 \\(\\sin u\\sim u\\)，所以 \\(\\sin 3x\\sim 3x\\)，极限为 \\(3\\)。'
+    },
+    {
+      module: 'limit', topic: '等价无穷小', difficulty: 4,
+      instruction: '计算极限',
+      expression: '\\lim_{x\\to0}\\frac{1-\\cos x}{x^2}',
+      answer: '1/2',
+      solution: '利用 \\(1-\\cos x=2\\sin^2(x/2)\\)，得到 \\(\\frac12\\)。'
+    },
+    {
+      module: 'limit', topic: '泰勒展开', difficulty: 6,
+      instruction: '计算极限',
+      expression: '\\lim_{x\\to0}\\frac{e^x-1-x-\\frac{x^2}{2}}{x^3}',
+      answer: '1/6',
+      solution: '使用 \\(e^x=1+x+\\frac{x^2}{2}+\\frac{x^3}{6}+o(x^3)\\)。'
+    },
+    {
+      module: 'limit', topic: '复合极限', difficulty: 8,
+      instruction: '计算极限',
+      expression: '\\lim_{x\\to0}\\frac{\\ln(1+\\sin x)-x+\\frac{x^2}{2}}{x^3}',
+      answer: '-1/6',
+      solution: '对 \\(\\sin x\\) 与 \\(\\ln(1+u)\\) 分层展开并保留到三阶。'
+    },
 
-      不能直接判错。
+    {
+      module: 'derivative', topic: '复合函数求导', difficulty: 2,
+      instruction: '求导',
+      expression: 'y=\\ln(1+x^2)',
+      answer: '2x/(1+x^2)',
+      solution: '链式法则得到 \\(y\'=\\frac{2x}{1+x^2}\\)。'
+    },
+    {
+      module: 'derivative', topic: '乘积法则', difficulty: 4,
+      instruction: '求导',
+      expression: 'y=x^2e^x',
+      answer: 'e^x(x^2+2x)',
+      solution: '乘积法则：\\(y\'=2xe^x+x^2e^x=e^x(x^2+2x)\\)。'
+    },
+    {
+      module: 'derivative', topic: '隐函数求导', difficulty: 6,
+      instruction: '已知曲线，求 \\(dy/dx\\)',
+      expression: 'x^2+xy+y^2=1',
+      answer: '-(2x+y)/(x+2y)',
+      solution: '两边对 \\(x\\) 求导并整理 \\(y\'\\) 项。'
+    },
+    {
+      module: 'derivative', topic: '高阶导数', difficulty: 8,
+      instruction: '求二阶导数',
+      expression: 'y=e^x\\sin x',
+      answer: '2e^x cos x',
+      solution: '先求 \\(y\'=e^x(\\sin x+\\cos x)\\)，再求一次导数。'
+    },
 
-      标记为：
-      needsManualCheck
-    */
+    {
+      module: 'integral', topic: '基本积分', difficulty: 2,
+      instruction: '计算不定积分',
+      expression: '\\int(3x^2+2x)\\,dx',
+      answer: 'x^3+x^2+C',
+      solution: '逐项积分得到 \\(x^3+x^2+C\\)。'
+    },
+    {
+      module: 'integral', topic: '换元积分', difficulty: 4,
+      instruction: '计算不定积分',
+      expression: '\\int 2x\\cos(x^2)\\,dx',
+      answer: 'sin(x^2)+C',
+      solution: '令 \\(u=x^2\\)，则 \\(du=2x\\,dx\\)。'
+    },
+    {
+      module: 'integral', topic: '分部积分', difficulty: 6,
+      instruction: '计算不定积分',
+      expression: '\\int x^2e^x\\,dx',
+      answer: 'e^x(x^2-2x+2)+C',
+      solution: '连续两次分部积分即可。'
+    },
+    {
+      module: 'integral', topic: '定积分技巧', difficulty: 8,
+      instruction: '计算定积分',
+      expression: '\\int_0^1\\frac{\\ln(1+x)}{1+x}\\,dx',
+      answer: '(ln2)^2/2',
+      solution: '令 \\(u=\\ln(1+x)\\)，积分化为 \\(\\int_0^{\\ln2}u\\,du\\)。'
+    }
+  ];
+
+  function fallbackQuestion(plan) {
+    const module = plan.module || 'limit';
+    const target = Number(plan.targetDifficulty) || 6;
+
+    const candidates = FALLBACK_BANK
+      .filter(q => q.module === module)
+      .sort((a, b) => Math.abs(a.difficulty - target) - Math.abs(b.difficulty - target));
+
+    const base = candidates[0] || FALLBACK_BANK[0];
+    const provisionalDifficulty = Number(base.difficulty);
 
     return {
-      correct: null,
+      ...base,
+      id: uid('fallback'),
+      source: 'fallback',
+      requestedDifficulty: target,
+      provisionalDifficulty,
+      calibratedDifficulty: calibrateDifficulty(provisionalDifficulty),
+      difficultyModelVersion: state.difficultyModel.version,
+      difficultyConfidence: 0.35,
+      difficultyDimensions: {
+        recognition: provisionalDifficulty,
+        techniqueDepth: provisionalDifficulty,
+        calculationComplexity: provisionalDifficulty,
+        knowledgeCoupling: Math.max(1, provisionalDifficulty - 1)
+      },
+      planPurpose: plan.purpose || 'daily',
+      reviewId: plan.reviewId || null
+    };
+  }
 
-      needsManualCheck:
-        true,
+  async function evaluateDifficultyForQuestion(question, plan, waitForResult = false) {
+    const task = (async () => {
+      try {
+        const evaluation = await apiCall('evaluate', {
+          question: {
+            module: question.module,
+            topic: question.topic,
+            instruction: question.instruction,
+            expression: question.expression,
+            solution: question.solution,
+            requestedDifficulty: question.requestedDifficulty,
+            provisionalDifficulty: question.provisionalDifficulty
+          },
+          plan: {
+            targetDifficulty: plan.targetDifficulty
+          }
+        });
 
-      feedback:
-        `当前 AI 判题服务不可用，本地规则无法确认该表达式是否与参考答案数学等价。参考答案：${question.answer}`
+        const estimated = clamp(
+          Number(evaluation.estimatedDifficulty) ||
+          question.provisionalDifficulty ||
+          question.requestedDifficulty ||
+          6,
+          1,
+          12
+        );
+
+        question.provisionalDifficulty = round2(estimated);
+        question.calibratedDifficulty = round2(
+          calibrateDifficulty(estimated)
+        );
+        question.difficultyConfidence = clamp(
+          Number(evaluation.confidence) || 0.55,
+          0,
+          1
+        );
+        question.difficultyDimensions = {
+          recognition: clamp(
+            Number(evaluation.recognition) || estimated,
+            1,
+            12
+          ),
+          techniqueDepth: clamp(
+            Number(evaluation.techniqueDepth) || estimated,
+            1,
+            12
+          ),
+          calculationComplexity: clamp(
+            Number(evaluation.calculationComplexity) || estimated,
+            1,
+            12
+          ),
+          knowledgeCoupling: clamp(
+            Number(evaluation.knowledgeCoupling) || Math.max(1, estimated - 1),
+            1,
+            12
+          )
+        };
+
+        const activeQuestion =
+          state.activeSession?.currentQuestion;
+
+        if (
+          activeQuestion &&
+          activeQuestion.id === question.id
+        ) {
+          Object.assign(
+            activeQuestion,
+            deepClone(question)
+          );
+          saveState();
+
+          const badge = $('difficultyBadge');
+
+          if (badge) {
+            badge.textContent =
+              questionDifficultyLabel(question);
+          }
+        }
+
+        return question;
+
+      } catch (error) {
+        console.warn(
+          '独立难度评估失败，保留生成器临时难度。',
+          error
+        );
+
+        return question;
+      }
+    })();
+
+    if (waitForResult) {
+      return await task;
+    }
+
+    task.catch(() => {});
+    return question;
+  }
+
+  async function generateOneQuestion(plan) {
+    try {
+      const data = await apiCall('generate', {
+        count: 1,
+        plans: [plan],
+        difficultyModelVersion: state.difficultyModel.version,
+        avoidPrompts: recentQuestionPrompts(10)
+      });
+
+      if (!Array.isArray(data.questions) || !data.questions.length) {
+        throw new Error('AI 返回题目为空');
+      }
+
+      apiHealthy = true;
+      renderApiStatus();
+
+      const q = data.questions[0];
+      const provisionalDifficulty = clamp(
+        Number(
+          q.estimatedDifficulty ??
+          q.provisionalDifficulty ??
+          q.selfEstimatedDifficulty ??
+          q.difficulty ??
+          plan.targetDifficulty
+        ) || 6,
+        1,
+        12
+      );
+
+      const question = {
+        id: q.id || uid('ai'),
+        module: MODULE_KEYS.includes(q.module)
+          ? q.module
+          : plan.module,
+
+        topic:
+          q.topic ||
+          plan.topic ||
+          '综合基础',
+
+        instruction: q.instruction || '',
+        expression: q.expression || '',
+        prompt: q.prompt || '',
+        answer: q.answer || '',
+        solution: q.solution || '',
+        keySteps: Array.isArray(q.keySteps)
+          ? q.keySteps
+          : [],
+
+        source: 'ai',
+
+        requestedDifficulty: clamp(
+          Number(plan.targetDifficulty) || 6,
+          1,
+          12
+        ),
+
+        provisionalDifficulty:
+          round2(provisionalDifficulty),
+
+        calibratedDifficulty:
+          round2(
+            calibrateDifficulty(
+              provisionalDifficulty
+            )
+          ),
+
+        difficultyModelVersion:
+          state.difficultyModel.version,
+
+        difficultyConfidence:
+          clamp(
+            Number(q.difficultyConfidence) || 0.4,
+            0,
+            1
+          ),
+
+        difficultyDimensions:
+          q.difficultyDimensions || {},
+
+        planPurpose:
+          plan.purpose || 'daily',
+
+        reviewId:
+          plan.reviewId || null
+      };
+
+      /*
+      诊断题：先等待独立评估，再展示。
+      每日/复习：题目先展示，独立评估后台补充，
+      避免用户每题都被两次模型请求卡住。
+      */
+      if (plan.purpose === 'diagnosis') {
+        await evaluateDifficultyForQuestion(
+          question,
+          plan,
+          true
+        );
+      } else {
+        evaluateDifficultyForQuestion(
+          question,
+          plan,
+          false
+        );
+      }
+
+      return question;
+
+    } catch (error) {
+      console.warn(error);
+      apiHealthy = false;
+      renderApiStatus();
+
+      toast(
+        'AI 暂不可用，已切换到本地备用题'
+      );
+
+      return fallbackQuestion(plan);
+    }
+  }
+
+  function recentQuestionPrompts(limit = 10) {
+    return state.history
+      .slice(-limit)
+      .map(item => item.prompt || item.expression || '')
+      .filter(Boolean);
+  }
+
+  /*
+  =========================================================
+  Stats + review queue
+  =========================================================
+  */
+
+  function recordPracticeStats(question, correct) {
+    state.stats.attempts += 1;
+    if (correct) state.stats.correct += 1;
+
+    const moduleStat = state.stats.byModule[question.module];
+    moduleStat.attempts += 1;
+    if (correct) moduleStat.correct += 1;
+  }
+
+  function recordHistory({
+    question,
+    userAnswer,
+    correct,
+    purpose,
+    abilityResult = null,
+    topicResult = null,
+    needsManualCheck = false
+  }) {
+    const record = {
+      id: uid('attempt'),
+      questionId: question.id,
+      module: question.module,
+      topic: question.topic,
+      instruction: question.instruction || '',
+      expression: question.expression || '',
+      prompt: question.prompt || '',
+      answer: question.answer,
+      userAnswer,
+      correct,
+      needsManualCheck,
+      purpose,
+
+      requestedDifficulty: question.requestedDifficulty ?? null,
+      provisionalDifficulty: question.provisionalDifficulty ?? question.difficulty ?? null,
+      calibratedDifficulty: question.calibratedDifficulty ?? question.provisionalDifficulty ?? question.difficulty ?? null,
+      difficultyModelVersion: question.difficultyModelVersion || state.difficultyModel.version,
+      difficultyConfidence: question.difficultyConfidence ?? null,
+      difficultyDimensions: question.difficultyDimensions || null,
+
+      abilityBefore: abilityResult?.before ?? null,
+      abilityAfter: abilityResult?.after ?? null,
+      predictedCorrectProbability: abilityResult?.probability ?? null,
+      learningRate: abilityResult?.k ?? null,
+      abilityWeight: abilityResult?.weight ?? null,
+
+      topicAbilityBefore: topicResult?.before ?? null,
+      topicAbilityAfter: topicResult?.after ?? null,
+
+      at: new Date().toISOString()
+    };
+
+    state.history.push(record);
+
+    if (state.history.length > 1200) {
+      state.history = state.history.slice(-1200);
+    }
+
+    return record;
+  }
+
+  function queueWrongQuestion(question) {
+    const key = topicKey(question);
+
+    let item = state.reviews.find(r => r.key === key && r.highFreq !== false);
+
+    if (!item) {
+      item = {
+        id: uid('review'),
+        key,
+        module: question.module,
+        topic: question.topic || '综合基础',
+        instruction: question.instruction || '',
+        expression: question.expression || '',
+        prompt: question.prompt || '',
+        answer: question.answer,
+        solution: question.solution,
+        provisionalDifficulty: question.provisionalDifficulty ?? question.difficulty ?? 6,
+        calibratedDifficulty: question.calibratedDifficulty ?? question.provisionalDifficulty ?? question.difficulty ?? 6,
+        difficultyModelVersion: question.difficultyModelVersion || state.difficultyModel.version,
+        wrongCount: 1,
+        correctStreak: 0,
+        highFreq: true,
+        nextReviewAt: addDaysISO(2),
+        updatedAt: new Date().toISOString()
+      };
+
+      state.reviews.push(item);
+
+      return {
+        type: 'create',
+        id: item.id
+      };
+    }
+
+    const before = deepClone(item);
+
+    item.wrongCount = (item.wrongCount || 0) + 1;
+    item.correctStreak = 0;
+    item.highFreq = true;
+    item.nextReviewAt = addDaysISO(5);
+    item.updatedAt = new Date().toISOString();
+
+    item.instruction = question.instruction || item.instruction;
+    item.expression = question.expression || item.expression;
+    item.prompt = question.prompt || item.prompt;
+    item.answer = question.answer || item.answer;
+    item.solution = question.solution || item.solution;
+    item.provisionalDifficulty = question.provisionalDifficulty ?? item.provisionalDifficulty;
+    item.calibratedDifficulty = question.calibratedDifficulty ?? item.calibratedDifficulty;
+
+    return {
+      type: 'update',
+      id: item.id,
+      before
+    };
+  }
+
+  function undoReviewMutation(mutation) {
+    if (!mutation) return;
+
+    if (mutation.type === 'create') {
+      state.reviews = state.reviews.filter(item => item.id !== mutation.id);
+      return;
+    }
+
+    if (mutation.type === 'update' && mutation.before) {
+      const index = state.reviews.findIndex(item => item.id === mutation.id);
+
+      if (index >= 0) {
+        state.reviews[index] = deepClone(mutation.before);
+      }
+    }
+  }
+
+  function updateReviewItem(reviewId, correct) {
+    if (!reviewId) return null;
+
+    const item = state.reviews.find(r => r.id === reviewId);
+    if (!item) return null;
+
+    const before = deepClone(item);
+
+    if (correct) {
+      item.correctStreak = (item.correctStreak || 0) + 1;
+
+      if (item.correctStreak >= 3) {
+        item.highFreq = false;
+        item.nextReviewAt = null;
+      } else {
+        item.nextReviewAt = addDaysISO(5);
+      }
+
+    } else {
+      item.correctStreak = 0;
+      item.wrongCount = (item.wrongCount || 0) + 1;
+      item.highFreq = true;
+      item.nextReviewAt = addDaysISO(5);
+    }
+
+    item.updatedAt = new Date().toISOString();
+
+    return {
+      type: 'update',
+      id: item.id,
+      before
+    };
+  }
+
+  function dueReviews() {
+    const today = todayISO();
+
+    return state.reviews
+      .filter(r =>
+        r.highFreq !== false &&
+        r.nextReviewAt &&
+        r.nextReviewAt <= today
+      )
+      .sort((a, b) => String(a.nextReviewAt).localeCompare(String(b.nextReviewAt)));
+  }
+
+  /*
+  =========================================================
+  Weakness + strategy
+  =========================================================
+  */
+
+  function weakTopics(module = null) {
+    const rows = Object.values(state.stats.byTopic)
+      .filter(item => !module || item.module === module)
+      .filter(item => item.attempts >= 2)
+      .map(item => ({
+        ...item,
+        acc: accuracy(item.correct, item.attempts)
+      }));
+
+    rows.sort((a, b) => {
+      const aa = a.acc ?? 100;
+      const bb = b.acc ?? 100;
+
+      if (aa !== bb) return aa - bb;
+      return (a.ability ?? 99) - (b.ability ?? 99);
+    });
+
+    return rows;
+  }
+
+  function modulePriority() {
+    return MODULE_KEYS
+      .map(module => {
+        const stat = state.stats.byModule[module];
+        const acc = accuracy(stat.correct, stat.attempts);
+        const ability = state.profile.abilityByModule[module];
+
+        return {
+          module,
+          score:
+            (acc === null ? 0 : (100 - acc) / 100) * 1.2 +
+            (12 - ability) / 12
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.module);
+  }
+
+  function effectiveConfidence(module) {
+    const base = Number(state.profile.confidenceByModule[module]) || 0.15;
+
+    const latest = [...state.history]
+      .reverse()
+      .find(item =>
+        item.module === module &&
+        item.at &&
+        !item.needsManualCheck
+      );
+
+    if (!latest) return base;
+
+    const elapsedMs = Date.now() - new Date(latest.at).getTime();
+    const days = Math.max(0, elapsedMs / 86400000);
+
+    // 久未练习只降低“系统确定程度”，不直接降低 Ability。
+    const decayed = base * Math.exp(-days / 90);
+
+    return round2(clamp(decayed, 0.15, 0.98));
+  }
+
+  function trainingModeLabel(mode = state.settings.trainingMode) {
+    return {
+      balanced: '均衡自适应',
+      foundation: '基础巩固',
+      sprint: '考研冲刺',
+      challenge: '高阶挑战'
+    }[mode] || '均衡自适应';
+  }
+
+  function zoneLabel(zone) {
+    return {
+      consolidate: '巩固',
+      target: '主训练',
+      challenge: '挑战',
+      review: '到期复习'
+    }[zone] || zone;
+  }
+
+  /*
+  =========================================================
+  Daily planning
+  =========================================================
+  */
+
+  const DAILY_PATTERNS = {
+    balanced: [
+      'target', 'consolidate', 'target', 'challenge', 'target',
+      'review', 'target', 'consolidate', 'target', 'challenge', 'target', 'challenge'
+    ],
+    foundation: [
+      'consolidate', 'target', 'consolidate', 'target', 'review',
+      'target', 'consolidate', 'target', 'target', 'consolidate', 'target', 'consolidate'
+    ],
+    sprint: [
+      'target', 'challenge', 'target', 'review', 'target',
+      'challenge', 'target', 'target', 'challenge', 'consolidate', 'target', 'challenge'
+    ],
+    challenge: [
+      'target', 'challenge', 'challenge', 'target', 'review',
+      'challenge', 'target', 'challenge', 'target', 'challenge', 'challenge', 'target'
+    ]
+  };
+
+  function recentSessionAccuracy(session, lastN = 4) {
+    const judged = (session.results || [])
+      .filter(r => typeof r.correct === 'boolean')
+      .slice(-lastN);
+
+    if (!judged.length) return null;
+
+    return judged.filter(r => r.correct).length / judged.length;
+  }
+
+  function chooseDailyZone(session) {
+    const mode = state.settings.trainingMode;
+    const pattern = DAILY_PATTERNS[mode] || DAILY_PATTERNS.balanced;
+    const idx = session.results.length;
+
+    let zone = pattern[idx % pattern.length];
+    const recent = recentSessionAccuracy(session, 4);
+
+    if (recent !== null && session.results.length >= 3) {
+      if (recent >= 0.8) {
+        if (zone === 'target') zone = 'challenge';
+      } else if (recent <= 0.35) {
+        if (zone === 'challenge') zone = 'consolidate';
+        else if (zone === 'target') zone = 'consolidate';
+      }
+    }
+
+    if (zone === 'review') {
+      const available = dueReviews().filter(r => !(session.usedReviewIds || []).includes(r.id));
+      if (!available.length) zone = 'target';
+    }
+
+    return zone;
+  }
+
+  function chooseModuleForDaily(session) {
+    const counts = Object.fromEntries(MODULE_KEYS.map(m => [m, 0]));
+
+    for (const r of session.results || []) {
+      if (r.module in counts) counts[r.module] += 1;
+    }
+
+    const priority = modulePriority();
+
+    return [...MODULE_KEYS].sort((a, b) => {
+      const countDiff = counts[a] - counts[b];
+      if (countDiff !== 0) return countDiff;
+
+      return priority.indexOf(a) - priority.indexOf(b);
+    })[0];
+  }
+
+  function chooseWeakTopic(module) {
+    const weak = weakTopics(module);
+    if (!weak.length) return null;
+
+    const top = weak.slice(0, 3);
+    return top[Math.floor(Math.random() * top.length)]?.topic || null;
+  }
+
+  function targetDifficultyFor(module, zone) {
+    if (state.settings.difficultyMode === 'fixed') {
+      return Number(state.settings.manualLevels[module]) || 6;
+    }
+
+    const theta = Number(state.profile.abilityByModule[module]) || 6;
+    const confidence = effectiveConfidence(module);
+
+    const offsets = {
+      consolidate: -1,
+      target: 0,
+      challenge: 1.5,
+      review: -0.3
+    };
+
+    const modeBias = {
+      balanced: 0,
+      foundation: -0.25,
+      sprint: 0.25,
+      challenge: 0.5
+    };
+
+    const verificationBias =
+      confidence < 0.35 && zone === 'target'
+        ? -0.35
+        : 0;
+
+    return round2(
+      clamp(
+        theta +
+        (offsets[zone] || 0) +
+        (modeBias[state.settings.trainingMode] || 0) +
+        verificationBias,
+        1,
+        12
+      )
+    );
+  }
+
+  function makeDailyPlan(session) {
+    const zone = chooseDailyZone(session);
+
+    if (zone === 'review') {
+      const item = dueReviews().find(r => !(session.usedReviewIds || []).includes(r.id));
+
+      if (item) {
+        session.usedReviewIds = session.usedReviewIds || [];
+        session.usedReviewIds.push(item.id);
+
+        const target = state.settings.difficultyMode === 'fixed'
+          ? state.settings.manualLevels[item.module]
+          : clamp(
+              Number(item.calibratedDifficulty ?? item.provisionalDifficulty ?? state.profile.abilityByModule[item.module]) || 6,
+              1,
+              12
+            );
+
+        return {
+          module: item.module,
+          topic: item.topic,
+          targetDifficulty: round2(target),
+          purpose: 'review',
+          zone: 'review',
+          reviewId: item.id,
+          referenceQuestion: {
+            instruction: item.instruction,
+            expression: item.expression,
+            prompt: item.prompt,
+            answer: item.answer,
+            solution: item.solution
+          }
+        };
+      }
+    }
+
+    const module = chooseModuleForDaily(session);
+    const topic = chooseWeakTopic(module);
+
+    return {
+      module,
+      topic,
+      targetDifficulty: targetDifficultyFor(module, zone),
+      purpose: 'daily',
+      zone,
+      reviewId: null
     };
   }
 
   /*
   =========================================================
-  统计 / 错题调度
+  Diagnosis planning
   =========================================================
   */
 
-  function recordAttempt(
-    question,
-    correct,
-    mode,
-    userAnswer
-  ) {
-    state.stats.attempts +=
-      1;
-
-    if (
-      correct
-    ) {
-      state.stats.correct +=
-        1;
-    }
-
-    const moduleStat =
-      state.stats.byModule[
-        question.module
-      ] ||
-      (
-        state.stats.byModule[
-          question.module
-        ] = {
-          attempts: 0,
-          correct: 0
-        }
-      );
-
-    moduleStat.attempts +=
-      1;
-
-    if (
-      correct
-    ) {
-      moduleStat.correct +=
-        1;
-    }
-
-    const key =
-      topicKey(
-        question
-      );
-
-    const topicStat =
-      state.stats.byTopic[
-        key
-      ] ||
-      (
-        state.stats.byTopic[
-          key
-        ] = {
-          module:
-            question.module,
-
-          topic:
-            question.topic ||
-            '综合基础',
-
-          attempts:
-            0,
-
-          correct:
-            0
-        }
-      );
-
-    topicStat.attempts +=
-      1;
-
-    if (
-      correct
-    ) {
-      topicStat.correct +=
-        1;
-    }
-
-    state.history.unshift({
-      id:
-        uid('h'),
-
-      at:
-        new Date()
-          .toISOString(),
-
-      date:
-        todayISO(),
-
-      mode,
-
-      module:
-        question.module,
-
-      topic:
-        question.topic,
-
-      prompt:
-        question.prompt,
-
-      correct,
-
-      userAnswer
-    });
-
-    state.history =
-      state.history.slice(
-        0,
-        150
-      );
+  function createDiagnosisModuleState() {
+    return {
+      ability: 6,
+      attempts: 0,
+      confidence: 0.1,
+      lastDifficulty: 6,
+      lastCorrect: null,
+      lowCorrect: null,
+      highWrong: null,
+      recentAbilities: [],
+      finished: false
+    };
   }
 
-  function findReviewForQuestion(
-    question
-  ) {
-    const key =
-      topicKey(
-        question
-      );
+  function createDiagnosisSession() {
+    return {
+      id: uid('session'),
+      mode: 'diagnosis',
+      startedAt: new Date().toISOString(),
+      completed: false,
+      currentQuestion: null,
+      results: [],
+      moduleIndex: 0,
+      diagnosis: {
+        limit: createDiagnosisModuleState(),
+        derivative: createDiagnosisModuleState(),
+        integral: createDiagnosisModuleState()
+      }
+    };
+  }
 
-    return state.reviews.find(
-      r =>
-        r.key === key
+  function currentDiagnosisModule(session) {
+    while (
+      session.moduleIndex < MODULE_KEYS.length &&
+      session.diagnosis[MODULE_KEYS[session.moduleIndex]].finished
+    ) {
+      session.moduleIndex += 1;
+    }
+
+    return MODULE_KEYS[session.moduleIndex] || null;
+  }
+
+  function nextDiagnosticDifficulty(ds) {
+    if (ds.attempts === 0) return 6;
+
+    if (Number.isFinite(ds.lowCorrect) && Number.isFinite(ds.highWrong)) {
+      const low = Math.min(ds.lowCorrect, ds.highWrong);
+      const high = Math.max(ds.lowCorrect, ds.highWrong);
+      const midpoint = (low + high) / 2;
+
+      if (Math.abs(high - low) <= 1.5) {
+        return round2(clamp((midpoint + ds.ability) / 2, 1, 12));
+      }
+
+      return round2(clamp(midpoint, 1, 12));
+    }
+
+    const step = ds.attempts <= 2 ? 2 : 1;
+
+    if (ds.lastCorrect) {
+      return round2(clamp(ds.lastDifficulty + step, 1, 12));
+    }
+
+    return round2(clamp(ds.lastDifficulty - step, 1, 12));
+  }
+
+  function diagnosisPlan(session) {
+    const module = currentDiagnosisModule(session);
+    if (!module) return null;
+
+    const ds = session.diagnosis[module];
+    const targetDifficulty = nextDiagnosticDifficulty(ds);
+
+    return {
+      module,
+      topic: null,
+      targetDifficulty,
+      purpose: 'diagnosis',
+      zone: 'placement'
+    };
+  }
+
+  function updateDiagnosisEstimate(session, question, correct) {
+    const module = question.module;
+    const ds = session.diagnosis[module];
+    const b = Number(question.calibratedDifficulty ?? question.provisionalDifficulty ?? question.requestedDifficulty) || 6;
+
+    const before = ds.ability;
+    const p = correctProbability(before, b);
+
+    // 诊断期学习率故意更大，用于快速定位，不等同于日常学习率。
+    const k = 0.75;
+    const w = difficultyWeight('diagnosis');
+    const after = clamp(before + k * ((correct ? 1 : 0) - p) * w, 1, 13.5);
+
+    ds.ability = round2(after);
+    ds.attempts += 1;
+    ds.lastDifficulty = b;
+    ds.lastCorrect = correct;
+
+    if (correct) {
+      ds.lowCorrect = Number.isFinite(ds.lowCorrect)
+        ? Math.max(ds.lowCorrect, b)
+        : b;
+    } else {
+      ds.highWrong = Number.isFinite(ds.highWrong)
+        ? Math.min(ds.highWrong, b)
+        : b;
+    }
+
+    ds.recentAbilities.push(ds.ability);
+    ds.recentAbilities = ds.recentAbilities.slice(-4);
+
+    const baseConfidence = 1 - Math.exp(-ds.attempts / 3.2);
+    const bracketBonus =
+      Number.isFinite(ds.lowCorrect) && Number.isFinite(ds.highWrong)
+        ? 0.12
+        : 0;
+
+    const spread = ds.recentAbilities.length >= 2
+      ? Math.max(...ds.recentAbilities) - Math.min(...ds.recentAbilities)
+      : 99;
+
+    const stabilityPenalty = spread > 1.2 ? 0.1 : spread > 0.7 ? 0.05 : 0;
+
+    ds.confidence = round2(
+      clamp(baseConfidence + bracketBonus - stabilityPenalty, 0.1, 0.96)
     );
-  }
 
-  function handleWrongReviewScheduling(
-    question
-  ) {
-    const key =
-      topicKey(
-        question
-      );
-
-    let item =
-      state.reviews.find(
-        r =>
-          r.key === key
-      );
+    const hasBracket = Number.isFinite(ds.lowCorrect) && Number.isFinite(ds.highWrong);
 
     if (
-      !item
+      ds.attempts >= 8 ||
+      (ds.attempts >= 5 && ds.confidence >= 0.8 && (hasBracket || ds.attempts >= 6))
     ) {
-      item = {
-        id:
-          uid('r'),
+      ds.finished = true;
 
-        key,
+      state.profile.abilityByModule[module] = round2(ds.ability);
+      state.profile.confidenceByModule[module] = ds.confidence;
+      state.profile.effectiveAttemptsByModule[module] = Math.max(
+        state.profile.effectiveAttemptsByModule[module] || 0,
+        ds.attempts * 0.6
+      );
 
-        module:
-          question.module,
+      syncDisplayLevel(module, true);
+    }
 
-        topic:
-          question.topic ||
-          '综合基础',
+    return {
+      before: round2(before),
+      after: round2(after),
+      probability: round2(p),
+      k,
+      weight: w,
+      changed: true
+    };
+  }
 
-        wrongCount:
-          0,
+  /*
+  =========================================================
+  Session lifecycle
+  =========================================================
+  */
 
-        correctStreak:
-          0,
+  function createDailySession() {
+    return {
+      id: uid('session'),
+      mode: 'daily',
+      startedAt: new Date().toISOString(),
+      completed: false,
+      total: clamp(Number(state.settings.dailyCount) || 10, 8, 12),
+      currentQuestion: null,
+      results: [],
+      usedReviewIds: []
+    };
+  }
 
-        highFreq:
-          true,
+  function createReviewSession(items) {
+    return {
+      id: uid('session'),
+      mode: 'review',
+      startedAt: new Date().toISOString(),
+      completed: false,
+      total: Math.min(items.length, 8),
+      currentQuestion: null,
+      results: [],
+      reviewIds: items.slice(0, 8).map(item => item.id)
+    };
+  }
 
-        dueAt:
-          null,
+  function sessionContainerId(session) {
+    return {
+      diagnosis: 'diagnosisSession',
+      daily: 'dailySession',
+      review: 'reviewSession'
+    }[session.mode];
+  }
 
-        lastWrongAt:
-          null,
+  function sessionView(session) {
+    return {
+      diagnosis: 'diagnosis',
+      daily: 'daily',
+      review: 'review'
+    }[session.mode];
+  }
 
-        examplePrompts:
-          []
+  function renderSessionLoading(containerId, text = '正在准备下一题…') {
+    const container = $(containerId);
+    if (!container) return;
+
+    container.classList.remove('hidden');
+    container.innerHTML = `
+      <div class="rounded-2xl border border-line bg-white p-8 text-center shadow-soft">
+        <div class="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-line border-t-ink"></div>
+        <div class="mt-4 text-sm text-muted">${escapeHTML(text)}</div>
+      </div>
+    `;
+  }
+
+  async function ensureCurrentQuestion(session) {
+    if (session.completed || session.currentQuestion) return;
+
+    const containerId = sessionContainerId(session);
+    renderSessionLoading(containerId);
+
+    let plan = null;
+
+    if (session.mode === 'daily') {
+      if (session.results.length >= session.total) {
+        finishSession(session);
+        return;
+      }
+
+      plan = makeDailyPlan(session);
+
+    } else if (session.mode === 'review') {
+      if (session.results.length >= session.total) {
+        finishSession(session);
+        return;
+      }
+
+      const reviewId = session.reviewIds[session.results.length];
+      const item = state.reviews.find(r => r.id === reviewId);
+
+      if (!item) {
+        session.results.push({
+          skipped: true,
+          correct: null,
+          at: new Date().toISOString()
+        });
+        return ensureCurrentQuestion(session);
+      }
+
+      const target = state.settings.difficultyMode === 'fixed'
+        ? state.settings.manualLevels[item.module]
+        : Number(item.calibratedDifficulty ?? item.provisionalDifficulty ?? state.profile.abilityByModule[item.module]) || 6;
+
+      plan = {
+        module: item.module,
+        topic: item.topic,
+        targetDifficulty: clamp(target, 1, 12),
+        purpose: 'review',
+        zone: 'review',
+        reviewId: item.id,
+        referenceQuestion: {
+          instruction: item.instruction,
+          expression: item.expression,
+          prompt: item.prompt,
+          answer: item.answer,
+          solution: item.solution
+        }
       };
 
-      state.reviews.push(
-        item
-      );
+    } else if (session.mode === 'diagnosis') {
+      plan = diagnosisPlan(session);
+
+      if (!plan) {
+        finishSession(session);
+        return;
+      }
     }
 
-    item.wrongCount +=
-      1;
+    session.currentQuestion = await generateOneQuestion(plan);
+    session.currentQuestion.zone = plan.zone || plan.purpose;
 
-    item.correctStreak =
-      0;
-
-    item.highFreq =
-      true;
-
-    item.lastWrongAt =
-      todayISO();
-
-    item.examplePrompts = [
-      question.prompt,
-
-      ...(
-        item.examplePrompts ||
-        []
-      )
-    ].slice(
-      0,
-      5
-    );
-
-    /*
-      首次错：
-      2 天后。
-
-      再次错：
-      5 天后。
-    */
-
-    item.dueAt =
-      addDaysISO(
-        item.wrongCount === 1
-          ? 2
-          : 5
-      );
+    saveState();
+    renderActiveSession(containerId);
   }
 
-  function handleCorrectReviewScheduling(
-    question
-  ) {
-    const item =
-      findReviewForQuestion(
-        question
-      );
+  function sessionProgressText(session) {
+    if (session.mode === 'diagnosis') {
+      const module = currentDiagnosisModule(session);
+      if (!module) return '诊断完成';
 
+      const ds = session.diagnosis[module];
+
+      return `${moduleLabel(module)} · 已测 ${ds.attempts} 题 · 置信度 ${Math.round(ds.confidence * 100)}%`;
+    }
+
+    return `${Math.min(session.results.length + 1, session.total)} / ${session.total}`;
+  }
+
+  function questionDifficultyLabel(question) {
+    const b = Number(question.calibratedDifficulty ?? question.provisionalDifficulty ?? question.requestedDifficulty) || 6;
+
+    if (b >= 12.65) return 'Lv.12+';
+
+    return `难度 ${b.toFixed(1)}`;
+  }
+
+  function renderActiveSession(containerId) {
+    const session = state.activeSession;
+    const container = $(containerId);
+
+    if (!session || !container) return;
+
+    container.classList.remove('hidden');
+
+    if (session.completed) {
+      renderSessionComplete(container, session);
+      return;
+    }
+
+    const q = session.currentQuestion;
+
+    if (!q) {
+      ensureCurrentQuestion(session);
+      return;
+    }
+
+    const zone = q.zone || q.planPurpose || session.mode;
+
+    let abilityText = '';
+
+    if (session.mode === 'diagnosis') {
+      const ds = session.diagnosis[q.module];
+      abilityText = `当前估计 θ ${Number(ds.ability).toFixed(2)}`;
+    } else if (state.settings.difficultyMode === 'adaptive') {
+      abilityText = `当前 ${moduleLabel(q.module)} θ ${Number(state.profile.abilityByModule[q.module]).toFixed(2)}`;
+    } else {
+      abilityText = `固定 ${displayLevelLabel(q.module)}`;
+    }
+
+    container.innerHTML = `
+      <article class="question-card question-enter overflow-hidden rounded-2xl border border-line bg-white shadow-soft">
+        <div class="border-b border-line px-5 py-4 sm:px-7">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-[#f1f0ec] px-2.5 py-1 text-[11px] font-medium text-muted">
+                ${escapeHTML(moduleLabel(q.module))}
+              </span>
+              <span class="rounded-full bg-[#f1f0ec] px-2.5 py-1 text-[11px] font-medium text-muted">
+                ${escapeHTML(q.topic || '综合基础')}
+              </span>
+              <span id="difficultyBadge" class="rounded-full bg-claySoft px-2.5 py-1 text-[11px] font-medium text-clay">
+                ${escapeHTML(questionDifficultyLabel(q))}
+              </span>
+              <span class="rounded-full bg-sageSoft px-2.5 py-1 text-[11px] font-medium text-sage">
+                ${escapeHTML(zoneLabel(zone))}
+              </span>
+            </div>
+
+            <div class="text-xs text-muted">
+              ${escapeHTML(sessionProgressText(session))}
+            </div>
+          </div>
+
+          <div class="mt-2 text-[11px] text-muted">
+            ${escapeHTML(abilityText)}
+          </div>
+        </div>
+
+        <div class="px-5 py-6 sm:px-7 sm:py-8">
+          <div class="text-[11px] font-medium uppercase tracking-[.12em] text-muted">Question</div>
+
+          <div id="questionMathArea" class="mt-4 min-w-0 text-base leading-8">
+            ${questionPromptHTML(q)}
+          </div>
+
+          <div class="mt-7">
+            <label for="answerInput" class="text-sm font-medium">你的答案</label>
+            <textarea
+              id="answerInput"
+              rows="3"
+              spellcheck="false"
+              class="mt-2 w-full resize-y rounded-xl border border-line bg-[#fbfaf7] px-4 py-3 text-sm leading-6 transition focus:border-[#c9c3ba] focus:bg-white"
+              placeholder="支持普通表达式、LaTeX、小数、分数或中文数值"
+            ></textarea>
+          </div>
+
+          <div id="answerFeedback" class="mt-5 hidden"></div>
+
+          <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <div class="text-xs text-muted">
+              ${q.source === 'fallback' ? '本地备用题' : `AI 生成 · 难度模型 ${escapeHTML(q.difficultyModelVersion || state.difficultyModel.version)}`}
+            </div>
+
+            <button
+              id="submitAnswerBtn"
+              class="rounded-xl bg-ink px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              提交答案
+            </button>
+          </div>
+        </div>
+      </article>
+    `;
+
+    $('submitAnswerBtn')?.addEventListener('click', () => submitCurrentAnswer(containerId));
+
+    $('answerInput')?.addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        submitCurrentAnswer(containerId);
+      }
+    });
+
+    typesetMath(container);
+  }
+
+  async function submitCurrentAnswer(containerId) {
+    const session = state.activeSession;
+    const q = session?.currentQuestion;
+    const input = $('answerInput');
+    const button = $('submitAnswerBtn');
+
+    if (!session || !q || !input || !button) return;
+
+    const userAnswer = input.value.trim();
+
+    if (!userAnswer) {
+      toast('先写答案。');
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '判题中…';
+
+    const verdict = await judgeAnswer(q, userAnswer);
+
+    let abilityResult = null;
+    let topicResult = null;
+    let historyRecord = null;
+    let reviewMutation = null;
+
+    if (!verdict.needsManualCheck && typeof verdict.correct === 'boolean') {
+      if (session.mode === 'diagnosis') {
+        abilityResult = updateDiagnosisEstimate(session, q, verdict.correct);
+
+        historyRecord = recordHistory({
+          question: q,
+          userAnswer,
+          correct: verdict.correct,
+          purpose: 'diagnosis',
+          abilityResult
+        });
+
+      } else {
+        const purpose = q.planPurpose === 'review' ? 'review' : 'daily';
+
+        recordPracticeStats(q, verdict.correct);
+
+        const b = Number(
+          q.calibratedDifficulty ??
+          q.provisionalDifficulty ??
+          q.requestedDifficulty
+        ) || 6;
+
+        abilityResult = updateAbility(
+          q.module,
+          b,
+          verdict.correct,
+          purpose
+        );
+
+        topicResult = updateTopicMastery(
+          q,
+          verdict.correct,
+          purpose
+        );
+
+        if (purpose === 'review') {
+          reviewMutation = updateReviewItem(
+            q.reviewId,
+            verdict.correct
+          );
+        } else if (!verdict.correct) {
+          reviewMutation = queueWrongQuestion(q);
+        }
+
+        historyRecord = recordHistory({
+          question: q,
+          userAnswer,
+          correct: verdict.correct,
+          purpose,
+          abilityResult,
+          topicResult
+        });
+      }
+    } else {
+      historyRecord = recordHistory({
+        question: q,
+        userAnswer,
+        correct: null,
+        purpose: session.mode,
+        needsManualCheck: true
+      });
+    }
+
+    const result = {
+      questionId: q.id,
+      module: q.module,
+      topic: q.topic,
+      correct: verdict.needsManualCheck ? null : verdict.correct,
+      needsManualCheck: Boolean(verdict.needsManualCheck),
+      userAnswer,
+      feedback: verdict.feedback || '',
+      zone: q.zone || q.planPurpose,
+      difficulty:
+        q.calibratedDifficulty ??
+        q.provisionalDifficulty ??
+        q.requestedDifficulty,
+
+      abilityBefore: abilityResult?.before ?? null,
+      abilityAfter: abilityResult?.after ?? null,
+      topicAbilityBefore: topicResult?.before ?? null,
+      topicAbilityAfter: topicResult?.after ?? null,
+
+      historyId: historyRecord?.id || null,
+      reviewMutation,
+      errorType: verdict.correct === false && session.mode !== 'diagnosis'
+        ? null
+        : 'not_applicable',
+
+      at: new Date().toISOString()
+    };
+
+    session.results.push(result);
+
+    saveState();
+    renderAnswerFeedback(
+      session,
+      q,
+      result,
+      verdict,
+      containerId
+    );
+
+    renderSidebarReviewBadge();
+    renderDashboard();
+    renderReviewIntro();
+  }
+
+  /*
+  错题原因是自报信息，只用于调整“这次错误对能力值的权重”。
+  它不改变判题本身。
+  */
+  const ERROR_FACTORS = {
+    knowledge: {
+      label: '不会做',
+      ability: 1,
+      topic: 1,
+      excludeFromStats: false
+    },
+    method: {
+      label: '方法想错',
+      ability: 0.8,
+      topic: 0.85,
+      excludeFromStats: false
+    },
+    careless: {
+      label: '计算粗心',
+      ability: 0.4,
+      topic: 0.45,
+      excludeFromStats: false
+    },
+    input: {
+      label: '输入失误',
+      ability: 0,
+      topic: 0,
+      excludeFromStats: true
+    }
+  };
+
+  function classifyWrongAttempt(session, question, result, errorType) {
     if (
-      !item
+      result.correct !== false ||
+      session.mode === 'diagnosis' ||
+      result.errorType
     ) {
       return;
     }
 
-    item.correctStreak =
-      (
-        item.correctStreak ||
-        0
-      ) + 1;
+    const config = ERROR_FACTORS[errorType] || ERROR_FACTORS.knowledge;
+    result.errorType = errorType;
 
-    if (
-      item.correctStreak >=
-      3
-    ) {
-      item.highFreq =
-        false;
-
-      item.dueAt =
-        null;
-
-    } else {
-      item.dueAt =
-        addDaysISO(
-          2
-        );
-    }
-  }
-
-  function dueReviews() {
-    const today =
-      todayISO();
-
-    return state.reviews.filter(
-      r =>
-        r.highFreq &&
-        r.dueAt &&
-        r.dueAt <= today
-    );
-  }
-
-  function computeStreak() {
-    const set =
-      new Set(
-        state.checkins
-      );
-
-    let cursor =
-      new Date();
-
-    cursor.setHours(
-      12,
-      0,
-      0,
-      0
+    const historyItem = state.history.find(
+      item => item.id === result.historyId
     );
 
-    const today =
-      todayISO();
+    /*
+    Ability 原先按 factor=1 计算。
+    用户分类后，只缩放“这一次错误造成的 delta”，
+    不重算此前或此后的记录。
+    */
+    if (
+      state.settings.difficultyMode === 'adaptive' &&
+      result.abilityBefore !== null &&
+      result.abilityAfter !== null
+    ) {
+      const before = Number(result.abilityBefore);
+      const oldAfter = Number(result.abilityAfter);
+      const originalDelta = oldAfter - before;
+      const adjustedAfter = before + originalDelta * config.ability;
 
-    const yesterday =
-      dateOffsetISO(
-        -1
+      const current = Number(
+        state.profile.abilityByModule[question.module]
+      ) || oldAfter;
+
+      state.profile.abilityByModule[question.module] = round2(
+        clamp(
+          current + (adjustedAfter - oldAfter),
+          1,
+          13.5
+        )
       );
 
-    if (
-      !set.has(today) &&
-      !set.has(yesterday)
-    ) {
-      return 0;
-    }
+      result.abilityAfter = round2(adjustedAfter);
 
-    if (
-      !set.has(today)
-    ) {
-      cursor.setDate(
-        cursor.getDate() -
-        1
+      const originalWeight = Number(
+        historyItem?.abilityWeight || 0
       );
-    }
 
-    let streak = 0;
-
-    while (
-      true
-    ) {
-      const y =
-        cursor.getFullYear();
-
-      const m =
-        String(
-          cursor.getMonth() +
-          1
-        ).padStart(
-          2,
-          '0'
-        );
-
-      const d =
-        String(
-          cursor.getDate()
-        ).padStart(
-          2,
-          '0'
-        );
-
-      const key =
-        `${y}-${m}-${d}`;
-
-      if (
-        !set.has(key)
-      ) {
-        break;
+      if (originalWeight > 0) {
+        state.profile.effectiveAttemptsByModule[question.module] =
+          Math.max(
+            0,
+            Number(
+              state.profile.effectiveAttemptsByModule[question.module]
+            ) -
+            originalWeight *
+            (1 - config.ability)
+          );
       }
 
-      streak +=
-        1;
+      syncDisplayLevel(question.module);
 
-      cursor.setDate(
-        cursor.getDate() -
-        1
+      if (historyItem) {
+        historyItem.abilityAfter = result.abilityAfter;
+        historyItem.abilityWeight =
+          originalWeight * config.ability;
+      }
+    }
+
+    const topic = getTopicStat(
+      question.module,
+      question.topic || '综合基础'
+    );
+
+    if (
+      topic &&
+      result.topicAbilityBefore !== null &&
+      result.topicAbilityAfter !== null
+    ) {
+      const before = Number(result.topicAbilityBefore);
+      const oldAfter = Number(result.topicAbilityAfter);
+      const adjustedAfter =
+        before +
+        (oldAfter - before) *
+        config.topic;
+
+      topic.ability = round2(
+        clamp(
+          Number(topic.ability) +
+          (adjustedAfter - oldAfter),
+          1,
+          13.5
+        )
       );
+
+      result.topicAbilityAfter = round2(adjustedAfter);
+
+      if (historyItem) {
+        historyItem.topicAbilityAfter =
+          result.topicAbilityAfter;
+      }
+    }
+
+    if (config.excludeFromStats) {
+      state.stats.attempts = Math.max(
+        0,
+        state.stats.attempts - 1
+      );
+
+      const moduleStat =
+        state.stats.byModule[question.module];
+
+      moduleStat.attempts = Math.max(
+        0,
+        moduleStat.attempts - 1
+      );
+
+      const topicStat = getTopicStat(
+        question.module,
+        question.topic || '综合基础'
+      );
+
+      if (topicStat) {
+        topicStat.attempts = Math.max(
+          0,
+          topicStat.attempts - 1
+        );
+
+        topicStat.confidence = round2(
+          clamp(
+            1 - Math.exp(-topicStat.attempts / 12),
+            0.15,
+            0.98
+          )
+        );
+      }
+
+      undoReviewMutation(result.reviewMutation);
+
+      if (historyItem) {
+        historyItem.countsTowardStats = false;
+      }
+    }
+
+    if (historyItem) {
+      historyItem.errorType = errorType;
+    }
+
+    saveState();
+    renderDashboard();
+    renderSidebarReviewBadge();
+    renderReviewIntro();
+
+    const note = $('errorTypeNote');
+
+    if (note) {
+      note.textContent =
+        errorType === 'input'
+          ? '已按输入失误处理：不计入能力、正确率和错题队列。'
+          : `已按“${config.label}”调整本题对 Ability 的影响。`;
+    }
+
+    $$('.error-type-btn').forEach(btn => {
+      btn.disabled = true;
+      btn.classList.add('opacity-50');
+    });
+  }
+
+  function renderAnswerFeedback(session, q, result, verdict, containerId) {
+    const feedback = $('answerFeedback');
+    const button = $('submitAnswerBtn');
+
+    if (!feedback || !button) return;
+
+    feedback.classList.remove('hidden');
+
+    const statusType = verdict.needsManualCheck
+      ? 'manual'
+      : verdict.correct
+        ? 'correct'
+        : 'wrong';
+
+    const statusTitle = {
+      correct: '答对了',
+      wrong: '这题需要再看一下',
+      manual: '暂时无法自动确认'
+    }[statusType];
+
+    const statusSymbol = {
+      correct: '✓',
+      wrong: '×',
+      manual: '?'
+    }[statusType];
+
+    const boxClass = {
+      correct: 'border-[#cddccf] bg-[#f6faf6]',
+      wrong: 'border-[#e7c4b7] bg-[#fff9f6]',
+      manual: 'border-[#ddd8cf] bg-[#faf9f6]'
+    }[statusType];
+
+    const titleClass = {
+      correct: 'text-sage',
+      wrong: 'text-clay',
+      manual: 'text-[#6f6a63]'
+    }[statusType];
+
+    const abilityChange =
+      result.abilityBefore !== null &&
+      result.abilityAfter !== null &&
+      session.mode !== 'diagnosis'
+        ? `
+          <div class="mt-3 rounded-lg bg-white px-3 py-2.5 text-xs leading-5 text-muted">
+            ${state.settings.difficultyMode === 'adaptive'
+              ? `${moduleLabel(q.module)} Ability：${Number(result.abilityBefore).toFixed(2)} → ${Number(result.abilityAfter).toFixed(2)}`
+              : `固定难度模式：本题不会改变 ${moduleLabel(q.module)} Level`}
+          </div>
+        `
+        : session.mode === 'diagnosis' && result.abilityAfter !== null
+          ? `
+            <div class="mt-3 rounded-lg bg-white px-3 py-2.5 text-xs leading-5 text-muted">
+              诊断估计：θ ${Number(result.abilityBefore).toFixed(2)} → ${Number(result.abilityAfter).toFixed(2)}
+            </div>
+          `
+          : '';
+
+    feedback.innerHTML = `
+      <div class="rounded-xl border p-4 ${boxClass}">
+        <div class="flex items-center gap-2 text-sm font-semibold ${titleClass}">
+          <span>${statusSymbol}</span>
+          <span>${statusTitle}</span>
+        </div>
+
+        <div class="mt-3 text-sm leading-7 text-ink">
+          <span class="text-muted">参考答案：</span>
+          ${answerMathHTML(q.answer)}
+        </div>
+
+        ${verdict.feedback
+          ? `<div class="mt-2 text-sm leading-6 text-muted">${escapeHTML(verdict.feedback)}</div>`
+          : ''
+        }
+
+        ${abilityChange}
+
+        ${(
+          statusType === 'wrong' &&
+          session.mode !== 'diagnosis'
+        )
+          ? `
+            <div class="mt-3 rounded-lg border border-line bg-white p-3">
+              <div class="text-xs font-medium text-ink">这次错误更接近哪一种？</div>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button class="error-type-btn rounded-lg border border-line px-2.5 py-1.5 text-xs hover:bg-[#faf9f6]" data-error-type="knowledge">不会做</button>
+                <button class="error-type-btn rounded-lg border border-line px-2.5 py-1.5 text-xs hover:bg-[#faf9f6]" data-error-type="method">方法想错</button>
+                <button class="error-type-btn rounded-lg border border-line px-2.5 py-1.5 text-xs hover:bg-[#faf9f6]" data-error-type="careless">计算粗心</button>
+                <button class="error-type-btn rounded-lg border border-line px-2.5 py-1.5 text-xs hover:bg-[#faf9f6]" data-error-type="input">输入失误</button>
+              </div>
+              <div id="errorTypeNote" class="mt-2 text-[11px] leading-5 text-muted">
+                不选择时默认按“不会做”处理。输入失误不会影响 Ability、正确率或错题队列。
+              </div>
+            </div>
+          `
+          : ''
+        }
+
+        ${verdict.needsManualCheck
+          ? `
+            <div class="mt-3 rounded-lg bg-white px-3 py-2.5 text-xs leading-5 text-muted">
+              这道题不会计入正确率、能力值或错题队列。
+            </div>
+          `
+          : ''
+        }
+
+        <details class="mt-4 rounded-lg border border-line bg-white px-3.5 py-3">
+          <summary class="cursor-pointer text-sm font-medium">查看解析</summary>
+          <div class="mt-3 text-sm leading-7 text-muted">
+            ${smartRichMathHTML(q.solution || '暂无解析。')}
+          </div>
+        </details>
+
+        <div class="mt-4 flex justify-end">
+          <button id="nextQuestionBtn" class="rounded-xl bg-ink px-4 py-2.5 text-sm font-medium text-white hover:opacity-90">
+            ${nextButtonLabel(session)}
+          </button>
+        </div>
+      </div>
+    `;
+
+    button.classList.add('hidden');
+
+    $$('.error-type-btn').forEach(errorButton => {
+      errorButton.addEventListener('click', () => {
+        classifyWrongAttempt(
+          session,
+          q,
+          result,
+          errorButton.dataset.errorType
+        );
+      });
+    });
+
+    $('nextQuestionBtn')?.addEventListener('click', async () => {
+      if (
+        result.correct === false &&
+        session.mode !== 'diagnosis' &&
+        !result.errorType
+      ) {
+        classifyWrongAttempt(
+          session,
+          q,
+          result,
+          'knowledge'
+        );
+      }
+
+      session.currentQuestion = null;
+
+      if (session.mode === 'daily' && session.results.length >= session.total) {
+        finishSession(session);
+      } else if (session.mode === 'review' && session.results.length >= session.total) {
+        finishSession(session);
+      } else if (session.mode === 'diagnosis') {
+        const module = q.module;
+        const ds = session.diagnosis[module];
+
+        if (ds.finished) {
+          currentDiagnosisModule(session);
+        }
+
+        if (!currentDiagnosisModule(session)) {
+          finishSession(session);
+        }
+      }
+
+      saveState();
+
+      if (!session.completed) {
+        renderSessionLoading(containerId);
+        await ensureCurrentQuestion(session);
+      } else {
+        renderActiveSession(containerId);
+      }
+    });
+
+    typesetMath(feedback);
+  }
+
+  function nextButtonLabel(session) {
+    if (session.mode === 'diagnosis') {
+      const allFinished = MODULE_KEYS.every(m => session.diagnosis[m].finished);
+      return allFinished ? '查看诊断结果' : '下一题';
+    }
+
+    return session.results.length >= session.total ? '查看结果' : '下一题';
+  }
+
+  function finishSession(session) {
+    session.completed = true;
+    session.completedAt = new Date().toISOString();
+    session.currentQuestion = null;
+
+    if (session.mode === 'diagnosis') {
+      MODULE_KEYS.forEach(module => {
+        const ds = session.diagnosis[module];
+
+        if (!ds.finished && ds.attempts > 0) {
+          state.profile.abilityByModule[module] = round2(ds.ability);
+          state.profile.confidenceByModule[module] = ds.confidence;
+          syncDisplayLevel(module, true);
+        }
+      });
+
+      state.profile.diagnosed = true;
+      state.profile.diagnosisCompletedAt = new Date().toISOString();
+      state.profile.placementSource = 'adaptive-diagnosis';
+    }
+
+    if (session.mode === 'daily') {
+      if (!state.checkins.includes(todayISO())) {
+        state.checkins.push(todayISO());
+        state.checkins.sort();
+      }
+
+      state.dailyMeta.lastCompletedDate = todayISO();
+    }
+
+    saveState();
+    renderAll();
+  }
+
+  function renderSessionComplete(container, session) {
+    const judged = session.results.filter(r => typeof r.correct === 'boolean');
+    const correctCount = judged.filter(r => r.correct).length;
+    const judgedCount = judged.length;
+    const manualCount = session.results.filter(r => r.needsManualCheck).length;
+    const rate = judgedCount ? Math.round((correctCount / judgedCount) * 100) : null;
+
+    let extra = '';
+
+    if (session.mode === 'diagnosis') {
+      extra = `
+        <div class="mt-6 grid gap-2 sm:grid-cols-3">
+          ${MODULE_KEYS.map(module => `
+            <div class="rounded-xl bg-[#f7f6f2] p-4 text-left">
+              <div class="text-xs text-muted">${moduleLabel(module)}</div>
+              <div class="mt-2 flex items-end justify-between">
+                <span class="text-lg font-semibold">${
+                  Number(state.profile.abilityByModule[module]) >= 12.65
+                    ? 'Lv.12+'
+                    : `Lv.${state.profile.displayLevelByModule[module]}`
+                }</span>
+                <span class="text-[11px] text-muted">θ ${Number(state.profile.abilityByModule[module]).toFixed(2)}</span>
+              </div>
+              <div class="mt-1 text-[11px] text-muted">置信度 ${Math.round((state.profile.confidenceByModule[module] || 0) * 100)}%</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+    } else if (session.mode === 'daily') {
+      extra = `
+        <div class="mt-5 rounded-xl bg-sageSoft px-4 py-3 text-sm text-sage">
+          ✓ 今日打卡已记录。连续 ${computeStreak()} 天。
+        </div>
+      `;
+
+    } else {
+      const remaining = state.reviews.filter(r => r.highFreq !== false).length;
+      extra = `
+        <div class="mt-5 rounded-xl bg-[#f7f6f2] px-4 py-3 text-sm text-muted">
+          当前仍有 ${remaining} 个考点处于高频复习队列。
+        </div>
+      `;
+    }
+
+    const scoreText = judgedCount
+      ? `${correctCount}/${judgedCount} 已判定题目正确 · 正确率 ${rate}%`
+      : '本组暂无可自动确认的判题结果';
+
+    const nextTarget =
+      session.mode === 'diagnosis'
+        ? 'daily'
+        : session.mode === 'daily'
+          ? 'review'
+          : 'dashboard';
+
+    const nextText =
+      session.mode === 'diagnosis'
+        ? '开始今日刷题'
+        : session.mode === 'daily'
+          ? '查看错题复习'
+          : '完成';
+
+    container.innerHTML = `
+      <div class="mx-auto max-w-2xl rounded-2xl border border-line bg-white p-7 text-center shadow-soft sm:p-9">
+        <div class="mx-auto grid h-12 w-12 place-items-center rounded-full ${rate === null ? 'bg-[#efede8] text-muted' : rate >= 70 ? 'bg-sageSoft text-sage' : 'bg-claySoft text-clay'} text-xl">
+          ${rate === null ? '?' : rate >= 70 ? '✓' : '↗'}
+        </div>
+
+        <h2 class="mt-5 text-2xl font-semibold tracking-tight">
+          ${session.mode === 'diagnosis' ? '诊断完成。' : '这一组完成了。'}
+        </h2>
+
+        <p class="mt-2 text-sm text-muted">${scoreText}</p>
+
+        ${manualCount
+          ? `<p class="mt-2 text-xs text-muted">另有 ${manualCount} 道题暂未自动判定，已从统计中排除。</p>`
+          : ''
+        }
+
+        ${extra}
+
+        <div class="mt-7 flex flex-wrap justify-center gap-2">
+          <button class="rounded-xl border border-line bg-white px-4 py-2.5 text-sm font-medium hover:bg-[#faf9f6]" data-complete-target="dashboard">
+            回到仪表盘
+          </button>
+
+          ${session.mode === 'diagnosis' && state.settings.difficultyMode === 'fixed'
+            ? `
+              <button id="useDiagnosisAdaptiveBtn" class="rounded-xl border border-sage bg-sageSoft px-4 py-2.5 text-sm font-medium text-sage hover:opacity-90">
+                使用诊断结果并开启自适应
+              </button>
+            `
+            : ''
+          }
+
+          <button class="rounded-xl bg-ink px-4 py-2.5 text-sm font-medium text-white hover:opacity-90" data-complete-target="${nextTarget}">
+            ${nextText}
+          </button>
+        </div>
+      </div>
+    `;
+
+    $('useDiagnosisAdaptiveBtn')?.addEventListener('click', () => {
+      state.settings.difficultyMode = 'adaptive';
+      state.profile.placementSource = 'adaptive-diagnosis';
+      saveState();
+      renderAll();
+      toast('已使用诊断结果开启自适应');
+      state.activeSession = null;
+      saveState();
+      switchView('daily');
+    });
+
+    container.querySelectorAll('[data-complete-target]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.activeSession = null;
+        saveState();
+
+        $('diagnosisSession')?.classList.add('hidden');
+        $('dailySession')?.classList.add('hidden');
+        $('reviewSession')?.classList.add('hidden');
+
+        $('diagnosisIntro')?.classList.remove('hidden');
+        $('dailyIntro')?.classList.remove('hidden');
+
+        switchView(btn.dataset.completeTarget);
+      });
+    });
+  }
+
+  /*
+  =========================================================
+  Start actions
+  =========================================================
+  */
+
+  async function startDiagnosis() {
+    state.activeSession = createDiagnosisSession();
+    saveState();
+
+    $('diagnosisIntro')?.classList.add('hidden');
+    $('diagnosisSession')?.classList.remove('hidden');
+
+    renderSessionLoading('diagnosisSession', '正在生成第一道定位题…');
+    await ensureCurrentQuestion(state.activeSession);
+  }
+
+  async function startDaily() {
+    state.activeSession = createDailySession();
+    saveState();
+
+    $('dailyIntro')?.classList.add('hidden');
+    $('dailySession')?.classList.remove('hidden');
+
+    renderSessionLoading('dailySession', '正在根据当前能力准备第一题…');
+    await ensureCurrentQuestion(state.activeSession);
+  }
+
+  async function startReview() {
+    const items = dueReviews();
+
+    if (!items.length) {
+      toast('今天没有到期错题。');
+      return;
+    }
+
+    state.activeSession = createReviewSession(items);
+    saveState();
+
+    $('reviewSession')?.classList.remove('hidden');
+
+    renderSessionLoading('reviewSession', '正在生成错题变式…');
+    await ensureCurrentQuestion(state.activeSession);
+  }
+
+  /*
+  =========================================================
+  Dashboard + views
+  =========================================================
+  */
+
+  function computeStreak() {
+    const set = new Set(state.checkins);
+    let streak = 0;
+    let offset = 0;
+
+    // 如果今天尚未打卡，允许从昨天开始计算当前连续纪录。
+    if (!set.has(todayISO())) {
+      offset = -1;
+    }
+
+    while (set.has(dateOffsetISO(offset))) {
+      streak += 1;
+      offset -= 1;
     }
 
     return streak;
   }
 
-  function todayDailyAttempts() {
-    return state.history.filter(
-      h =>
-        h.date ===
-          todayISO() &&
-        h.mode ===
-          'daily'
-    ).length;
+  function renderSidebarReviewBadge() {
+    const count = dueReviews().length;
+    const el = $('sidebarReviewCount');
+    if (!el) return;
+
+    el.textContent = count;
+
+    if (count > 0) el.classList.remove('hidden');
+    else el.classList.add('hidden');
   }
 
-  /*
-  =========================================================
-  页面导航
-  =========================================================
-  */
-
-  function switchView(
-    view
-  ) {
-    currentView =
-      view;
-
-    $$('.view')
-      .forEach(
-        el =>
-          el.classList.add(
-            'hidden'
-          )
+  function currentTodayDone() {
+    return state.history.filter(item => {
+      if (!item.at) return false;
+      const date = new Date(item.at);
+      return (
+        date.getFullYear() === new Date().getFullYear() &&
+        date.getMonth() === new Date().getMonth() &&
+        date.getDate() === new Date().getDate() &&
+        item.purpose !== 'diagnosis'
       );
-
-    $(
-      `view-${view}`
-    )?.classList.remove(
-      'hidden'
-    );
-
-    $$('.nav-btn')
-      .forEach(
-        btn =>
-          btn.classList.toggle(
-            'active',
-
-            btn.dataset
-              .viewTarget ===
-              view
-          )
-      );
-
-    const meta = {
-      dashboard: [
-        'Overview',
-        '今天也只做一点点。',
-        '把极限、导数、积分拆成每天 8–12 道的小剂量训练。'
-      ],
-
-      diagnosis: [
-        'Diagnosis',
-        '先知道自己卡在哪里。',
-        '摸底只决定起始难度，不给你贴“水平高低”的标签。'
-      ],
-
-      daily: [
-        'Daily practice',
-        '今天的任务已经准备好。',
-        '少量、持续、针对薄弱点，比偶尔猛刷更有用。'
-      ],
-
-      review: [
-        'Review',
-        '错题不是收藏品。',
-        '到期时做同考点变式题，让“会了”经得起换题。'
-      ],
-
-      checkin: [
-        'Consistency',
-        '把连续性看得比单日强度更重要。',
-        '这里记录的是你真正完成整组每日训练的日期。'
-      ]
-    }[view];
-
-    $('pageEyebrow')
-      .textContent =
-        meta[0];
-
-    $('pageTitle')
-      .textContent =
-        meta[1];
-
-    $('pageSubtitle')
-      .textContent =
-        meta[2];
-
-    if (
-      view ===
-      'dashboard'
-    ) {
-      renderDashboard();
-    }
-
-    if (
-      view ===
-      'review'
-    ) {
-      renderReviewQueue();
-    }
-
-    if (
-      view ===
-      'checkin'
-    ) {
-      renderCheckin();
-    }
-
-    if (
-      view ===
-      'diagnosis'
-    ) {
-      renderDiagnosisIntro();
-    }
-
-    if (
-      view ===
-      'daily'
-    ) {
-      renderDailyIntro();
-    }
-
-    if (
-      window.innerWidth <
-      1024
-    ) {
-      $('sideNav')
-        ?.classList.add(
-          'hidden'
-        );
-    }
+    }).length;
   }
 
-  /*
-  =========================================================
-  Dashboard
-  =========================================================
-  */
-
-  function renderDashboard() {
-    $('todayDone')
-      .textContent =
-        todayDailyAttempts();
-
-    const completedToday =
-      state.checkins.includes(
-        todayISO()
-      );
-
-    $('todayStatus')
-      .textContent =
-        completedToday
-          ? '已打卡'
-          : '未完成';
-
-    $('todayStatus')
-      .className =
-        completedToday
-
-          ? (
-            'rounded-full ' +
-            'bg-sageSoft ' +
-            'px-2.5 py-1 ' +
-            'text-[11px] ' +
-            'font-medium ' +
-            'text-sage'
-          )
-
-          : (
-            'rounded-full ' +
-            'bg-[#f1f0ec] ' +
-            'px-2.5 py-1 ' +
-            'text-[11px] ' +
-            'text-muted'
-          );
-
-    $('streakCount')
-      .textContent =
-        computeStreak();
-
-    $('dueReviewCount')
-      .textContent =
-        dueReviews().length;
-
-    $('overallAccuracy')
-      .textContent =
-        state.stats.attempts
-
-          ? (
-            `${accuracy(
-              state.stats.correct,
-              state.stats.attempts
-            )}%`
-          )
-
-          : '—';
-
-    const moduleWrap =
-      $('moduleAccuracyList');
-
-    moduleWrap.innerHTML =
-      Object.entries(
-        MODULES
-      )
-        .map(
-          (
-            [
-              key,
-              config
-            ]
-          ) => {
-            const s =
-              state.stats
-                .byModule[
-                  key
-                ];
-
-            const acc =
-              accuracy(
-                s.correct,
-                s.attempts
-              );
-
-            const width =
-              acc ?? 0;
-
-            return `
-              <div>
-
-                <div
-                  class="
-                    flex items-center
-                    justify-between
-                    text-sm
-                  "
-                >
-
-                  <div class="flex items-center gap-2">
-
-                    <span
-                      class="h-2 w-2 rounded-full"
-                      style="background:${config.color}"
-                    ></span>
-
-                    <span>
-                      ${config.label}
-                    </span>
-
-                  </div>
-
-                  <span class="text-xs text-muted">
-
-                    ${
-                      acc === null
-                        ? '暂无数据'
-                        : `${acc}% · ${s.attempts}题`
-                    }
-
-                  </span>
-
-                </div>
-
-                <div
-                  class="
-                    mt-2.5
-                    h-1.5
-                    overflow-hidden
-                    rounded-full
-                    bg-[#efede8]
-                  "
-                >
-
-                  <div
-                    class="
-                      h-full
-                      rounded-full
-                      transition-all
-                    "
-                    style="
-                      width:${width}%;
-                      background:${config.color};
-                    "
-                  ></div>
-
-                </div>
-
-              </div>
-            `;
-          }
-        )
-        .join('');
-
-    const weak =
-      Object.values(
-        state.stats.byTopic
-      )
-        .filter(
-          t =>
-            t.attempts >=
-            1
-        )
-
-        .map(
-          t => ({
-            ...t,
-
-            errorRate:
-              1 -
-              t.correct /
-              t.attempts
-          })
-        )
-
-        .sort(
-          (
-            a,
-            b
-          ) =>
-            b.errorRate -
-              a.errorRate ||
-            b.attempts -
-              a.attempts
-        )
-
-        .slice(
-          0,
-          5
-        );
-
-    $('weakTopicList')
-      .innerHTML =
-        weak.length
-
-          ? weak
-            .map(
-              (
-                t,
-                i
-              ) => `
-                <div
-                  class="
-                    flex items-center
-                    gap-3
-                    rounded-xl
-                    border border-line
-                    px-3.5 py-3
-                  "
-                >
-
-                  <span
-                    class="
-                      grid h-7 w-7
-                      shrink-0
-                      place-items-center
-                      rounded-full
-                      bg-[#f1f0ec]
-                      text-xs
-                      text-muted
-                    "
-                  >
-                    ${i + 1}
-                  </span>
-
-                  <div class="min-w-0 flex-1">
-
-                    <div
-                      class="truncate text-sm font-medium"
-                    >
-                      ${escapeHTML(
-                        t.topic
-                      )}
-                    </div>
-
-                    <div class="mt-0.5 text-xs text-muted">
-
-                      ${moduleLabel(
-                        t.module
-                      )}
-
-                      · 错误率
-
-                      ${
-                        Math.round(
-                          t.errorRate *
-                          100
-                        )
-                      }%
-
-                      · ${t.attempts} 次
-
-                    </div>
-
-                  </div>
-
-                </div>
-              `
-            )
-            .join('')
-
-          : emptyState(
-              '还没有薄弱考点数据',
-              '完成几道题后，这里会自动排序。'
-            );
-
-    const history =
-      state.history.slice(
-        0,
-        6
-      );
-
-    $('recentHistory')
-      .innerHTML =
-        history.length
-
-          ? history
-            .map(
-              h => `
-                <div
-                  class="
-                    flex items-start
-                    gap-3
-                  "
-                >
-
-                  <span
-                    class="
-                      mt-1.5
-                      h-2 w-2
-                      shrink-0
-                      rounded-full
-
-                      ${
-                        h.correct
-                          ? 'bg-emerald-500'
-                          : 'bg-clay'
-                      }
-                    "
-                  ></span>
-
-                  <div class="min-w-0 flex-1">
-
-                    <div class="truncate text-sm">
-
-                      ${
-                        escapeHTML(
-                          h.topic ||
-                          moduleLabel(
-                            h.module
-                          )
-                        )
-                      }
-
-                    </div>
-
-                    <div
-                      class="mt-0.5 text-xs text-muted"
-                    >
-
-                      ${
-                        h.correct
-                          ? '答对'
-                          : '答错'
-                      }
-
-                      · ${modeLabel(
-                        h.mode
-                      )}
-
-                      ·
-
-                      ${
-                        new Date(
-                          h.at
-                        )
-                          .toLocaleString(
-                            'zh-CN',
-                            {
-                              month:
-                                'numeric',
-
-                              day:
-                                'numeric',
-
-                              hour:
-                                '2-digit',
-
-                              minute:
-                                '2-digit'
-                            }
-                          )
-                      }
-
-                    </div>
-
-                  </div>
-
-                </div>
-              `
-            )
-            .join('')
-
-          : emptyState(
-              '还没有做题记录',
-              '第一次训练完成后会出现在这里。'
-            );
-
-    const due =
-      dueReviews().length;
-
-    if (
-      !state.profile
-        .diagnosed
-    ) {
-      $('nextActionTitle')
-        .textContent =
-          '先做一次能力诊断';
-
-      $('nextActionText')
-        .textContent =
-          '用 9 道基础题估算你在极限、导数、积分三个模块的起点。';
-
-      $('nextActionBtn')
-        .textContent =
-          '开始诊断';
-
-      $('nextActionBtn')
-        .dataset.target =
-          'diagnosis';
-
-    } else if (
-      due > 0
-    ) {
-      $('nextActionTitle')
-        .textContent =
-          `${due} 个考点已经到期`;
-
-      $('nextActionText')
-        .textContent =
-          '优先清掉到期复习，再开始今天的新题。';
-
-      $('nextActionBtn')
-        .textContent =
-          '去复习';
-
-      $('nextActionBtn')
-        .dataset.target =
-          'review';
-
-    } else {
-      $('nextActionTitle')
-        .textContent =
-          completedToday
-            ? '今天已经完成'
-            : '开始今日刷题';
-
-      $('nextActionText')
-        .textContent =
-          completedToday
-            ? '保持节奏即可，不需要为了打卡无限加题。'
-            : '今天生成 9 道基础计算题，重点照顾近期薄弱模块。';
-
-      $('nextActionBtn')
-        .textContent =
-          completedToday
-            ? '查看统计'
-            : '开始刷题';
-
-      $('nextActionBtn')
-        .dataset.target =
-          completedToday
-            ? 'checkin'
-            : 'daily';
+  function renderDiagnosisSummary() {
+    const el = $('diagnosisSummary');
+    if (!el) return;
+
+    if (!state.profile.diagnosed) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
     }
 
-    renderSidebarReviewBadge();
-
-    typesetMath(
-      $('view-dashboard')
-    );
-  }
-
-  function emptyState(
-    title,
-    text
-  ) {
-    return `
-      <div
-        class="
-          rounded-xl
-          border border-dashed border-line
-          bg-[#faf9f6]
-          px-4 py-5
-          text-center
-        "
-      >
-
-        <div class="text-sm font-medium">
-          ${title}
+    el.classList.remove('hidden');
+    el.innerHTML = `
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="font-medium">最近一次能力诊断</div>
+          <div class="mt-1 text-xs text-muted">
+            ${state.profile.diagnosisCompletedAt ? formatDateTimeShort(state.profile.diagnosisCompletedAt) : '已完成'} · 结果只作为练习起点建议
+          </div>
         </div>
+        <span class="rounded-full bg-sageSoft px-2.5 py-1 text-[11px] font-medium text-sage">
+          ${state.profile.placementSource === 'adaptive-diagnosis' ? '自适应诊断' : '已设定起点'}
+        </span>
+      </div>
 
-        <div class="mt-1 text-xs text-muted">
-          ${text}
-        </div>
-
+      <div class="mt-4 grid gap-2 sm:grid-cols-3">
+        ${MODULE_KEYS.map(module => `
+          <div class="rounded-lg bg-white px-3 py-3">
+            <div class="text-xs text-muted">${moduleLabel(module)}</div>
+            <div class="mt-1 flex items-end justify-between gap-2">
+              <span class="font-semibold">${displayLevelLabel(module)}</span>
+              <span class="text-[11px] text-muted">θ ${Number(state.profile.abilityByModule[module] || 6).toFixed(2)}</span>
+            </div>
+            <div class="mt-1 text-[11px] text-muted">
+              置信度 ${Math.round(effectiveConfidence(module) * 100)}%
+            </div>
+          </div>
+        `).join('')}
       </div>
     `;
   }
 
-  function modeLabel(
-    mode
-  ) {
-    return (
-      {
-        diagnosis:
-          '诊断',
+  function renderRecentHistory() {
+    const el = $('recentHistory');
+    if (!el) return;
 
-        daily:
-          '每日',
+    const rows = state.history
+      .slice()
+      .reverse()
+      .slice(0, 6);
 
-        review:
-          '复习'
-      }[mode] ||
-      mode
-    );
-  }
+    if (!rows.length) {
+      el.innerHTML = `
+        <div class="rounded-xl bg-[#f7f6f2] p-4 text-sm text-muted">
+          暂无作答记录。完成能力诊断或每日刷题后会显示在这里。
+        </div>
+      `;
+      return;
+    }
 
-  function renderSidebarReviewBadge() {
-    const count =
-      dueReviews().length;
+    el.innerHTML = rows.map(item => {
+      const status = item.needsManualCheck
+        ? { text: '未确认', cls: 'bg-[#efede8] text-muted' }
+        : item.correct === true
+          ? { text: '答对', cls: 'bg-sageSoft text-sage' }
+          : item.correct === false
+            ? { text: '答错', cls: 'bg-claySoft text-clay' }
+            : { text: '不计分', cls: 'bg-[#efede8] text-muted' };
 
-    const badge =
-      $('sidebarReviewCount');
-
-    badge.textContent =
-      count;
-
-    badge.classList.toggle(
-      'hidden',
-      count === 0
-    );
-  }
-
-  /*
-  =========================================================
-  Diagnosis
-  =========================================================
-  */
-
-  function renderDiagnosisIntro() {
-    const summary =
-      $('diagnosisSummary');
-
-    if (
-      state.profile
-        .diagnosed
-    ) {
-      summary.classList.remove(
-        'hidden'
+      const diff = Number(
+        item.calibratedDifficulty ??
+        item.provisionalDifficulty ??
+        item.requestedDifficulty
       );
 
-      summary.innerHTML = `
-        <div class="font-medium">
-          上次诊断已完成
+      const abilityChange =
+        Number.isFinite(Number(item.abilityBefore)) &&
+        Number.isFinite(Number(item.abilityAfter))
+          ? `${Number(item.abilityBefore).toFixed(2)} → ${Number(item.abilityAfter).toFixed(2)}`
+          : null;
+
+      return `
+        <div class="rounded-xl border border-line bg-[#faf9f6] p-3.5">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-medium">${moduleLabel(item.module)}</span>
+                <span class="text-[11px] text-muted">${escapeHTML(item.topic || '综合基础')}</span>
+                ${Number.isFinite(diff) ? `<span class="text-[11px] text-muted">L${diff.toFixed(1)}</span>` : ''}
+              </div>
+              <div class="mt-1 truncate text-[11px] text-muted">
+                ${escapeHTML(item.instruction || item.prompt || '练习题')}
+              </div>
+            </div>
+            <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${status.cls}">${status.text}</span>
+          </div>
+
+          <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted">
+            <span>${formatDateTimeShort(item.at)}</span>
+            ${abilityChange ? `<span>θ ${abilityChange}</span>` : ''}
+          </div>
         </div>
+      `;
+    }).join('');
+  }
 
-        <div
-          class="
-            mt-2
-            grid gap-2
-            sm:grid-cols-3
-          "
-        >
+  function renderReviewQueueList() {
+    const el = $('reviewQueueList');
+    if (!el) return;
 
-          ${
-            Object.entries(
-              state.profile
-                .levelByModule
-            )
-              .map(
-                (
-                  [
-                    m,
-                    level
-                  ]
-                ) => `
-                  <div
-                    class="
-                      rounded-lg
-                      bg-white
-                      px-3 py-2
-                      text-xs
-                    "
-                  >
+    const rows = state.reviews
+      .filter(item => item.highFreq !== false)
+      .slice()
+      .sort((a, b) => {
+        const ad = a.nextReviewAt || '9999-12-31';
+        const bd = b.nextReviewAt || '9999-12-31';
+        return ad.localeCompare(bd);
+      });
 
-                    <span class="text-muted">
-                      ${moduleLabel(m)}
-                    </span>
+    if (!rows.length) {
+      el.innerHTML = `
+        <div class="md:col-span-2 xl:col-span-3 rounded-2xl border border-dashed border-line bg-white/50 p-6 text-sm text-muted">
+          当前没有高频错题。新的错题会自动进入复习队列。
+        </div>
+      `;
+      return;
+    }
 
-                    <span
-                      class="
-                        float-right
-                        font-medium
-                      "
-                    >
-                      Lv.${level}
-                    </span>
+    el.innerHTML = rows.map(item => {
+      const due = item.nextReviewAt && item.nextReviewAt <= todayISO();
+      const diff = Number(item.calibratedDifficulty ?? item.provisionalDifficulty ?? 6);
 
-                  </div>
-                `
-              )
-              .join('')
-          }
+      return `
+        <article class="rounded-2xl border ${due ? 'border-[#e6b7a8] bg-[#fffaf7]' : 'border-line bg-white'} p-4 shadow-soft">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-sm font-semibold">${escapeHTML(item.topic || '综合基础')}</div>
+              <div class="mt-1 text-[11px] text-muted">${moduleLabel(item.module)} · L${Number.isFinite(diff) ? diff.toFixed(1) : '—'}</div>
+            </div>
+            <span class="rounded-full ${due ? 'bg-claySoft text-clay' : 'bg-[#efede8] text-muted'} px-2 py-0.5 text-[11px] font-medium">
+              ${due ? '到期' : '等待复习'}
+            </span>
+          </div>
 
+          <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
+            <div class="rounded-lg bg-[#f7f6f2] px-3 py-2">
+              <div class="text-muted">累计错误</div>
+              <div class="mt-1 font-semibold">${item.wrongCount || 0} 次</div>
+            </div>
+            <div class="rounded-lg bg-[#f7f6f2] px-3 py-2">
+              <div class="text-muted">复习连对</div>
+              <div class="mt-1 font-semibold">${item.correctStreak || 0}/3</div>
+            </div>
+          </div>
+
+          <div class="mt-3 text-[11px] text-muted">${formatReviewDate(item.nextReviewAt)}</div>
+        </article>
+      `;
+    }).join('');
+  }
+
+  function renderDashboard() {
+    if (!$('todayDone')) return;
+
+    const done = currentTodayDone();
+    $('todayDone').textContent = done;
+    $('todayStatus').textContent =
+      state.dailyMeta.lastCompletedDate === todayISO() ? '已完成' : '未完成';
+
+    $('streakCount').textContent = computeStreak();
+    $('dueReviewCount').textContent = dueReviews().length;
+
+    const overall = accuracy(state.stats.correct, state.stats.attempts);
+    $('overallAccuracy').textContent = overall === null ? '—' : `${overall}%`;
+
+    $('moduleAbilityList').innerHTML = MODULE_KEYS.map(module => {
+      const stat = state.stats.byModule[module];
+      const acc = accuracy(stat.correct, stat.attempts);
+      const theta = state.settings.difficultyMode === 'fixed'
+        ? state.settings.manualLevels[module]
+        : state.profile.abilityByModule[module];
+
+      const levelText = displayLevelLabel(module);
+      const confidence = Math.round(effectiveConfidence(module) * 100);
+      const width = clamp(((Number(theta) || 1) / 12) * 100, 4, 100);
+
+      return `
+        <div>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="text-sm font-medium">${moduleLabel(module)}</div>
+              <div class="mt-1 text-[11px] text-muted">
+                ${state.settings.difficultyMode === 'fixed'
+                  ? '固定难度'
+                  : `θ ${Number(theta).toFixed(2)} · 置信度 ${confidence}%`
+                }
+              </div>
+            </div>
+
+            <div class="text-right">
+              <div class="text-sm font-semibold">${levelText}</div>
+              <div class="mt-1 text-[11px] text-muted">${acc === null ? '暂无正确率' : `正确率 ${acc}%`}</div>
+            </div>
+          </div>
+
+          <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-[#efede8]">
+            <div class="h-full rounded-full" style="width:${width}%;background:${MODULES[module].color}"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    if (!state.profile.diagnosed && state.profile.placementSource === 'default') {
+      $('nextActionTitle').textContent = '先完成一次能力诊断';
+      $('nextActionText').textContent = '诊断是建议，不是强制。也可以直接到难度设置指定起点。';
+      $('nextActionBtn').textContent = '开始诊断';
+      $('nextActionBtn').dataset.target = 'diagnosis';
+    } else {
+      $('nextActionTitle').textContent = '开始今天的自适应训练';
+      $('nextActionText').textContent =
+        state.settings.difficultyMode === 'adaptive'
+          ? '系统会根据今天每一道题的表现动态调整后续难度。'
+          : '当前为固定难度模式，题目等级不会自动变化。';
+      $('nextActionBtn').textContent = '去每日刷题';
+      $('nextActionBtn').dataset.target = 'daily';
+    }
+
+    const strategyCards = [
+      {
+        title: state.settings.difficultyMode === 'adaptive' ? '动态自适应' : '固定难度',
+        text: state.settings.difficultyMode === 'adaptive'
+          ? 'Ability θ 每题更新'
+          : 'Level 按手动设置保持'
+      },
+      {
+        title: trainingModeLabel(),
+        text: '决定巩固 / 主训练 / 挑战比例'
+      },
+      {
+        title: `${state.settings.dailyCount} 题 / 日`,
+        text: state.difficultyModel.calibrated ? 'Anchor 已校准' : '临时 Soft Anchor'
+      }
+    ];
+
+    $('strategySummary').innerHTML = strategyCards.map(card => `
+      <div class="rounded-xl bg-[#f7f6f2] p-4">
+        <div class="text-sm font-semibold">${escapeHTML(card.title)}</div>
+        <div class="mt-1 text-xs leading-5 text-muted">${escapeHTML(card.text)}</div>
+      </div>
+    `).join('');
+
+    const weak = weakTopics().slice(0, 4);
+
+    $('weakTopicList').innerHTML = weak.length
+      ? weak.map(item => `
+          <div class="rounded-xl border border-line bg-[#faf9f6] p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-sm font-medium">${escapeHTML(item.topic)}</div>
+                <div class="mt-1 text-[11px] text-muted">${moduleLabel(item.module)} · ${item.attempts} 次有效作答</div>
+              </div>
+              <div class="text-right">
+                <div class="text-sm font-semibold">${item.acc}%</div>
+                <div class="mt-1 text-[11px] text-muted">Topic θ ${Number(item.ability).toFixed(2)}</div>
+              </div>
+            </div>
+          </div>
+        `).join('')
+      : `
+        <div class="rounded-xl bg-[#f7f6f2] p-4 text-sm text-muted">
+          先做一些题。数据太少时，系统不会装作已经了解你。
         </div>
       `;
 
-      $('startDiagnosisBtn')
-        .textContent =
-          '重新诊断';
+    renderRecentHistory();
+    renderDiagnosisSummary();
+  }
 
-    } else {
-      summary.classList.add(
-        'hidden'
-      );
+  function renderDailyPreview() {
+    const el = $('dailyPlanPreview');
+    if (!el) return;
 
-      $('startDiagnosisBtn')
-        .textContent =
-          '开始能力诊断';
+    const modeText =
+      state.settings.difficultyMode === 'adaptive'
+        ? '动态难度'
+        : `固定：极限 L${state.settings.manualLevels.limit} / 导数 L${state.settings.manualLevels.derivative} / 积分 L${state.settings.manualLevels.integral}`;
+
+    const items = [
+      modeText,
+      trainingModeLabel(),
+      `${state.settings.dailyCount} 题`,
+      dueReviews().length ? `${dueReviews().length} 个到期复习` : '暂无到期复习'
+    ];
+
+    el.innerHTML = items.map(text => `
+      <span class="rounded-full bg-[#f1f0ec] px-3 py-1.5 text-xs text-muted">${escapeHTML(text)}</span>
+    `).join('');
+  }
+
+  function renderReviewIntro() {
+    const count = dueReviews().length;
+    const text = $('reviewIntroText');
+    const button = $('startReviewBtn');
+
+    if (text) {
+      text.textContent = count
+        ? `今天有 ${count} 个考点到期。系统会生成同考点变式题，而不是机械重复原题。`
+        : '今天没有到期复习。新错题会按 2 天 / 5 天的节奏重新出现。';
+    }
+
+    if (button) {
+      button.disabled = count === 0;
+      button.classList.toggle('opacity-50', count === 0);
+    }
+
+    renderReviewQueueList();
+  }
+
+  function renderCheckin() {
+    if (!$('checkinStreak')) return;
+
+    $('checkinStreak').textContent = computeStreak();
+
+    const dates = Array.from({ length: 28 }, (_, i) => dateOffsetISO(i - 27));
+    const set = new Set(state.checkins);
+
+    $('monthCheckinCount').textContent = `${dates.filter(d => set.has(d)).length} 次打卡`;
+
+    $('checkinGrid').innerHTML = dates.map(d => {
+      const hit = set.has(d);
+      const date = new Date(`${d}T12:00:00`);
+
+      return `
+        <div title="${d}" class="aspect-square rounded-lg border ${hit ? 'border-sage/20 bg-sage text-white' : 'border-line bg-[#faf9f6] text-muted'} grid place-items-center text-[11px]">
+          ${date.getDate()}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderSettings() {
+    if (!$('limitLevelRange')) return;
+
+    MODULE_KEYS.forEach(module => {
+      const range = $(`${module}LevelRange`);
+      const value = $(`${module}LevelValue`);
+
+      if (range) range.value = state.settings.manualLevels[module];
+      if (value) value.textContent = `Lv.${state.settings.manualLevels[module]}`;
+    });
+
+    $$('.setting-mode-card').forEach(card => {
+      const active = card.dataset.settingMode === state.settings.difficultyMode;
+      card.classList.toggle('border-sage', active);
+      card.classList.toggle('bg-sageSoft', active);
+      card.querySelector('.mode-check').textContent = active ? '●' : '○';
+      card.querySelector('.mode-check').className = `mode-check ${active ? 'text-sage' : 'text-muted'}`;
+    });
+
+    $$('.training-mode-card').forEach(card => {
+      const active = card.dataset.trainingMode === state.settings.trainingMode;
+      card.classList.toggle('border-sage', active);
+      card.classList.toggle('bg-sageSoft', active);
+    });
+
+    if ($('difficultyModelBadge')) {
+      $('difficultyModelBadge').textContent =
+        state.difficultyModel.calibrated
+          ? `${state.difficultyModel.version} · calibrated`
+          : `${state.difficultyModel.version} · provisional`;
+    }
+
+    if ($('dailyCountSelect')) {
+      $('dailyCountSelect').value = String(state.settings.dailyCount);
     }
   }
 
-  function renderDailyIntro() {
-    const levels =
-      state.profile
-        .levelByModule;
+  function switchView(viewName) {
+    currentView = VIEW_META[viewName] ? viewName : 'dashboard';
 
-    $('dailyPlanHint')
-      .textContent =
-        state.profile
-          .diagnosed
+    $$('.view').forEach(el => el.classList.add('hidden'));
+    $(`#view-${currentView}`)?.classList.remove('hidden');
 
-          ? (
-            `当前难度：` +
-            `极限 Lv.${levels.limit} · ` +
-            `导数 Lv.${levels.derivative} · ` +
-            `积分 Lv.${levels.integral}`
-          )
+    $$('.nav-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.viewTarget === currentView);
+    });
 
-          : (
-            '尚未诊断，将以基础难度开始'
-          );
+    const meta = VIEW_META[currentView];
+    $('pageEyebrow').textContent = meta.eyebrow;
+    $('pageTitle').textContent = meta.title;
+    $('pageSubtitle').textContent = meta.subtitle;
 
-    const active =
-      state.activeSession;
+    if (window.innerWidth < 1024) {
+      $('sideNav')?.classList.add('hidden');
+    }
+
+    if (currentView === 'dashboard') renderDashboard();
+    if (currentView === 'diagnosis') renderDiagnosisSummary();
+    if (currentView === 'daily') renderDailyPreview();
+    if (currentView === 'review') renderReviewIntro();
+    if (currentView === 'checkin') renderCheckin();
+    if (currentView === 'settings') renderSettings();
+
+    const active = state.activeSession;
 
     if (
-      active?.mode ===
-        'daily' &&
-      active.date ===
-        todayISO() &&
-      active.index <
-        active.questions.length
+      active &&
+      !active.completed &&
+      sessionView(active) === currentView
     ) {
-      $('startDailyBtn')
-        .textContent =
-          `继续今日刷题 · ${active.index + 1}/${active.questions.length}`;
-
-    } else if (
-      state.checkins.includes(
-        todayISO()
-      )
-    ) {
-      $('startDailyBtn')
-        .textContent =
-          '今天已完成，再练一组';
-
-    } else {
-      $('startDailyBtn')
-        .textContent =
-          '开始今日刷题';
+      const introId = active.mode === 'diagnosis' ? 'diagnosisIntro' : active.mode === 'daily' ? 'dailyIntro' : null;
+      if (introId) $(introId)?.classList.add('hidden');
+      renderActiveSession(sessionContainerId(active));
     }
   }
 
-  function makeSession(
-    mode,
-    questions,
-    reviewKeys = []
-  ) {
-    state.activeSession = {
-      id:
-        uid('s'),
-
-      mode,
-
-      date:
-        todayISO(),
-
-      questions,
-
-      reviewKeys,
-
-      index:
-        0,
-
-      results:
-        [],
-
-      startedAt:
-        new Date()
-          .toISOString(),
-
-      completed:
-        false
-    };
-
-    saveState();
-
-    return state.activeSession;
-  }
-
-  async function startDiagnosis() {
-    setButtonLoading(
-      $('startDiagnosisBtn'),
-      true,
-      '生成诊断题…'
-    );
-
-    const questions =
-      await generateQuestions({
-        count:
-          9,
-
-        modules: [
-          'limit',
-          'derivative',
-          'integral'
-        ],
-
-        distribution: {
-          limit:
-            3,
-
-          derivative:
-            3,
-
-          integral:
-            3
-        },
-
-        difficultyByModule: {
-          limit:
-            2,
-
-          derivative:
-            2,
-
-          integral:
-            2
-        },
-
-        purpose:
-          'diagnosis'
-      });
-
-    setButtonLoading(
-      $('startDiagnosisBtn'),
-      false
-    );
-
-    makeSession(
-      'diagnosis',
-      questions
-    );
-
-    $('diagnosisIntro')
-      .classList.add(
-        'hidden'
-      );
-
-    $('diagnosisSession')
-      .classList.remove(
-        'hidden'
-      );
-
-    renderActiveSession(
-      'diagnosisSession'
-    );
-  }
-
-  function weakestModules() {
-    return Object.keys(
-      MODULES
-    )
-      .sort(
-        (
-          a,
-          b
-        ) => {
-          const sa =
-            state.stats
-              .byModule[a];
-
-          const sb =
-            state.stats
-              .byModule[b];
-
-          const aa =
-            sa.attempts
-              ? sa.correct /
-                sa.attempts
-              : 0.5;
-
-          const ab =
-            sb.attempts
-              ? sb.correct /
-                sb.attempts
-              : 0.5;
-
-          return (
-            aa -
-            ab
-          );
-        }
-      );
-  }
-
-  async function startDaily() {
-    const active =
-      state.activeSession;
-
-    if (
-      active?.mode ===
-        'daily' &&
-      active.date ===
-        todayISO() &&
-      active.index <
-        active.questions.length
-    ) {
-      $('dailyIntro')
-        .classList.add(
-          'hidden'
-        );
-
-      $('dailySession')
-        .classList.remove(
-          'hidden'
-        );
-
-      renderActiveSession(
-        'dailySession'
-      );
-
-      return;
-    }
-
-    setButtonLoading(
-      $('startDailyBtn'),
-      true,
-      '生成今日题目…'
-    );
-
-    const weak =
-      weakestModules();
-
-    const weakTopics =
-      Object.values(
-        state.stats.byTopic
-      )
-        .filter(
-          t =>
-            t.attempts > 0 &&
-            t.correct /
-            t.attempts <
-            0.75
-        )
-
-        .sort(
-          (
-            a,
-            b
-          ) =>
-            (
-              a.correct /
-              a.attempts
-            ) -
-            (
-              b.correct /
-              b.attempts
-            )
-        )
-
-        .slice(
-          0,
-          5
-        )
-
-        .map(
-          t =>
-            t.topic
-        );
-
-    const questions =
-      await generateQuestions({
-        count:
-          9,
-
-        modules: [
-          'limit',
-          'derivative',
-          'integral'
-        ],
-
-        focusModules:
-          weak.slice(
-            0,
-            2
-          ),
-
-        topics:
-          weakTopics,
-
-        difficultyByModule:
-          state.profile
-            .levelByModule,
-
-        purpose:
-          'daily'
-      });
-
-    setButtonLoading(
-      $('startDailyBtn'),
-      false
-    );
-
-    makeSession(
-      'daily',
-      questions
-    );
-
-    $('dailyIntro')
-      .classList.add(
-        'hidden'
-      );
-
-    $('dailySession')
-      .classList.remove(
-        'hidden'
-      );
-
-    renderActiveSession(
-      'dailySession'
-    );
-  }
-
-  /*
-  =========================================================
-  Review
-  =========================================================
-  */
-
-  function renderReviewQueue() {
-    const due =
-      dueReviews();
-
-    $('startReviewBtn')
-      .disabled =
-        due.length === 0;
-
-    $('startReviewBtn')
-      .classList.toggle(
-        'opacity-40',
-        due.length === 0
-      );
-
-    $('startReviewBtn')
-      .textContent =
-        due.length
-
-          ? `开始复习 · ${due.length}`
-
-          : '暂无到期复习';
-
-    const active =
-      state.activeSession;
-
-    if (
-      active?.mode ===
-        'review' &&
-      active.index <
-        active.questions.length
-    ) {
-      $('reviewSession')
-        .classList.remove(
-          'hidden'
-        );
-
-      renderActiveSession(
-        'reviewSession'
-      );
-
-    } else {
-      $('reviewSession')
-        .classList.add(
-          'hidden'
-        );
-    }
-
-    const sorted =
-      state.reviews
-        .filter(
-          r =>
-            r.highFreq
-        )
-
-        .sort(
-          (
-            a,
-            b
-          ) =>
-            String(
-              a.dueAt ||
-              '9999'
-            )
-              .localeCompare(
-                String(
-                  b.dueAt ||
-                  '9999'
-                )
-              )
-        );
-
-    $('reviewQueueList')
-      .innerHTML =
-        sorted.length
-
-          ? sorted
-            .map(
-              r => {
-                const isDue =
-                  r.dueAt &&
-                  r.dueAt <=
-                    todayISO();
-
-                return `
-                  <article
-                    class="
-                      rounded-2xl
-                      border
-
-                      ${
-                        isDue
-                          ? 'border-[#dfb09f] bg-[#fffaf7]'
-                          : 'border-line bg-white'
-                      }
-
-                      p-4
-                      shadow-soft
-                    "
-                  >
-
-                    <div
-                      class="
-                        flex
-                        items-start
-                        justify-between
-                        gap-3
-                      "
-                    >
-
-                      <div>
-
-                        <div class="text-xs text-muted">
-                          ${moduleLabel(
-                            r.module
-                          )}
-                        </div>
-
-                        <div
-                          class="
-                            mt-1
-                            text-sm
-                            font-semibold
-                          "
-                        >
-                          ${escapeHTML(
-                            r.topic
-                          )}
-                        </div>
-
-                      </div>
-
-                      <span
-                        class="
-                          rounded-full
-                          px-2.5 py-1
-                          text-[11px]
-
-                          ${
-                            isDue
-                              ? 'bg-claySoft text-clay'
-                              : 'bg-[#f1f0ec] text-muted'
-                          }
-                        "
-                      >
-
-                        ${
-                          isDue
-                            ? '已到期'
-                            : `复习于 ${r.dueAt || '—'}`
-                        }
-
-                      </span>
-
-                    </div>
-
-                    <div
-                      class="
-                        mt-4
-                        grid grid-cols-2
-                        gap-2
-                        text-xs
-                        text-muted
-                      "
-                    >
-
-                      <div
-                        class="
-                          rounded-lg
-                          bg-[#f7f6f2]
-                          p-2.5
-                        "
-                      >
-
-                        累计做错
-
-                        <strong
-                          class="float-right text-ink"
-                        >
-                          ${r.wrongCount}
-                        </strong>
-
-                      </div>
-
-                      <div
-                        class="
-                          rounded-lg
-                          bg-[#f7f6f2]
-                          p-2.5
-                        "
-                      >
-
-                        连续答对
-
-                        <strong
-                          class="float-right text-ink"
-                        >
-                          ${r.correctStreak}/3
-                        </strong>
-
-                      </div>
-
-                    </div>
-
-                  </article>
-                `;
-              }
-            )
-            .join('')
-
-          : emptyState(
-              '高频复习队列是空的',
-              '答错的考点会自动进入这里。'
-            );
-
+  function renderAll() {
+    renderApiStatus();
     renderSidebarReviewBadge();
-  }
-
-  async function startReview() {
-    const due =
-      dueReviews();
-
-    if (
-      !due.length
-    ) {
-      return;
-    }
-
-    setButtonLoading(
-      $('startReviewBtn'),
-      true,
-      '生成变式题…'
-    );
-
-    const questions = [];
-
-    for (
-      const review
-      of due
-    ) {
-      const generated =
-        await generateQuestions({
-          count:
-            1,
-
-          modules: [
-            review.module
-          ],
-
-          topics: [
-            review.topic
-          ],
-
-          avoidPrompts:
-            review.examplePrompts ||
-            [],
-
-          difficultyByModule: {
-            [review.module]:
-              state.profile
-                .levelByModule[
-                  review.module
-                ] ||
-              2
-          },
-
-          purpose:
-            'review-variant'
-        });
-
-      const q =
-        generated[0];
-
-      q.reviewKey =
-        review.key;
-
-      questions.push(q);
-    }
-
-    setButtonLoading(
-      $('startReviewBtn'),
-      false
-    );
-
-    makeSession(
-      'review',
-      questions,
-      due.map(
-        r =>
-          r.key
-      )
-    );
-
-    $('reviewSession')
-      .classList.remove(
-        'hidden'
-      );
-
-    renderActiveSession(
-      'reviewSession'
-    );
+    renderDashboard();
+    renderDiagnosisSummary();
+    renderDailyPreview();
+    renderReviewIntro();
+    renderCheckin();
+    renderSettings();
   }
 
   /*
   =========================================================
-  题目 Session
+  Settings events
   =========================================================
   */
 
-  function renderActiveSession(
-    containerId
-  ) {
-    const session =
-      state.activeSession;
+  const DIFFICULTY_PRESETS = {
+    foundation: { limit: 3, derivative: 3, integral: 3 },
+    exam: { limit: 6, derivative: 6, integral: 6 },
+    intensive: { limit: 8, derivative: 8, integral: 8 },
+    hard: { limit: 9, derivative: 9, integral: 9 },
+    competition: { limit: 11, derivative: 11, integral: 11 }
+  };
 
-    const container =
-      $(containerId);
-
-    if (
-      !session ||
-      !container
-    ) {
-      return;
-    }
-
-    if (
-      session.completed ||
-      session.index >=
-        session.questions.length
-    ) {
-      renderSessionComplete(
-        container,
-        session
-      );
-
-      return;
-    }
-
-    const q =
-      session.questions[
-        session.index
-      ];
-
-    const progress =
-      Math.round(
-        session.index /
-        session.questions.length *
-        100
-      );
-
-    const review =
-      q.reviewKey
-
-        ? state.reviews.find(
-            r =>
-              r.key ===
-              q.reviewKey
-          )
-
-        : null;
-
-    container.innerHTML = `
-      <div
-        class="
-          mx-auto
-          max-w-3xl
-          question-enter
-        "
-      >
-
-        <div
-          class="
-            mb-4
-            flex items-center
-            justify-between
-            gap-3
-            text-xs
-            text-muted
-          "
-        >
-
-          <span>
-            ${modeLabel(
-              session.mode
-            )}
-            ·
-            ${session.index + 1}/${session.questions.length}
-          </span>
-
-          <span>
-            ${moduleLabel(
-              q.module
-            )}
-            ·
-            ${escapeHTML(
-              q.topic
-            )}
-            ·
-            Lv.${q.difficulty}
-          </span>
-
-        </div>
-
-        <div
-          class="
-            h-1
-            overflow-hidden
-            rounded-full
-            bg-[#e9e6e0]
-          "
-        >
-
-          <div
-            class="
-              h-full
-              rounded-full
-              bg-clay
-              transition-all
-            "
-            style="width:${progress}%"
-          ></div>
-
-        </div>
-
-        <article
-          class="
-            mt-5
-            rounded-2xl
-            border border-line
-            bg-white
-            p-6
-            shadow-soft
-            sm:p-8
-          "
-        >
-
-          ${
-            review
-              ? `
-                <div
-                  class="
-                    mb-5
-                    inline-flex
-                    rounded-full
-                    bg-claySoft
-                    px-3 py-1
-                    text-xs
-                    font-medium
-                    text-clay
-                  "
-                >
-
-                  变式复习
-                  ·
-                  连续答对
-                  ${review.correctStreak}/3
-
-                </div>
-              `
-              : ''
-          }
-
-          <div
-            class="
-              text-xs
-              font-medium
-              uppercase
-              tracking-[.12em]
-              text-muted
-            "
-          >
-            Question
-          </div>
-
-          <div
-            class="
-              mt-4
-              text-lg
-              leading-9
-              sm:text-xl
-            "
-          >
-            ${q.prompt}
-          </div>
-
-          <label
-            class="
-              mt-8
-              block
-              text-xs
-              font-medium
-              text-muted
-            "
-            for="answerInput"
-          >
-            你的答案
-          </label>
-
-          <textarea
-            id="answerInput"
-            rows="2"
-            placeholder="例如：1/2、二分之一、0.5、2x/(1+x^2)"
-            class="
-              mt-2
-              w-full
-              resize-none
-              rounded-xl
-              border border-line
-              bg-[#fbfaf7]
-              px-4 py-3.5
-              text-base
-              transition
-              focus:border-[#b7afa5]
-              focus:bg-white
-            "
-          ></textarea>
-
-          <div
-            class="
-              mt-4
-              flex flex-wrap
-              items-center
-              justify-between
-              gap-3
-            "
-          >
-
-            <div
-              class="text-[11px] text-muted"
-            >
-              支持常见等价表达；AI 判题仅作辅助，必要时以教材/标准答案为准。
-            </div>
-
-            <button
-              id="submitAnswerBtn"
-              class="
-                rounded-xl
-                bg-ink
-                px-5 py-2.5
-                text-sm
-                font-medium
-                text-white
-                hover:opacity-90
-              "
-            >
-              提交答案
-            </button>
-
-          </div>
-
-          <div
-            id="answerFeedback"
-            class="mt-6 hidden"
-          ></div>
-
-        </article>
-
-      </div>
-    `;
-
-    $('submitAnswerBtn')
-      .addEventListener(
-        'click',
-        () =>
-          submitCurrentAnswer(
-            containerId
-          )
-      );
-
-    $('answerInput')
-      .addEventListener(
-        'keydown',
-        event => {
-          if (
-            (
-              event.ctrlKey ||
-              event.metaKey
-            ) &&
-            event.key ===
-              'Enter'
-          ) {
-            submitCurrentAnswer(
-              containerId
-            );
-          }
-        }
-      );
-
-    typesetMath(
-      container
-    );
+  function syncManualRangeLabels() {
+    MODULE_KEYS.forEach(module => {
+      const range = $(`${module}LevelRange`);
+      const value = $(`${module}LevelValue`);
+      if (range && value) value.textContent = `Lv.${range.value}`;
+    });
   }
 
-  async function submitCurrentAnswer(
-    containerId
-  ) {
-    const session =
-      state.activeSession;
-
-    if (
-      !session ||
-      session.completed
-    ) {
-      return;
-    }
-
-    const q =
-      session.questions[
-        session.index
-      ];
-
-    const input =
-      $('answerInput');
-
-    const userAnswer =
-      input.value.trim();
-
-    const button =
-      $('submitAnswerBtn');
-
-    if (
-      !userAnswer
-    ) {
-      toast(
-        '先写一个答案'
-      );
-
-      input.focus();
-
-      return;
-    }
-
-    setButtonLoading(
-      button,
-      true,
-      '判题中…'
-    );
-
-    input.disabled =
-      true;
-
-    const verdict =
-      await judgeAnswer(
-        q,
-        userAnswer
-      );
-
-    setButtonLoading(
-      button,
-      false
-    );
-
-    /*
-      只有明确判断为：
-
-      true
-      或
-      false
-
-      才写入正确率统计。
-
-      manual check
-      不算错题。
-    */
-
-    if (
-      !verdict.needsManualCheck
-    ) {
-      recordAttempt(
-        q,
-        verdict.correct,
-        session.mode,
-        userAnswer
-      );
-
-      if (
-        session.mode ===
-        'review'
-      ) {
-        if (
-          verdict.correct
-        ) {
-          handleCorrectReviewScheduling(
-            q
-          );
-
-        } else {
-          handleWrongReviewScheduling(
-            q
-          );
-        }
-
-      } else if (
-        !verdict.correct
-      ) {
-        handleWrongReviewScheduling(
-          q
-        );
+  function saveManualLevelsFromUI() {
+    MODULE_KEYS.forEach(module => {
+      const range = $(`${module}LevelRange`);
+      if (range) {
+        state.settings.manualLevels[module] = clamp(Number(range.value) || 6, 1, 12);
       }
+    });
+
+    if ($('dailyCountSelect')) {
+      state.settings.dailyCount = clamp(Number($('dailyCountSelect').value) || 10, 8, 12);
     }
+  }
 
-    session.results.push({
-      questionId:
-        q.id,
+  function applyManualAsAdaptiveStart() {
+    saveManualLevelsFromUI();
 
-      correct:
-        verdict.needsManualCheck
-          ? null
-          : verdict.correct,
+    state.settings.difficultyMode = 'adaptive';
+    state.profile.placementSource = 'manual-adaptive-start';
+    state.profile.diagnosed = false;
 
-      needsManualCheck:
-        Boolean(
-          verdict.needsManualCheck
-        ),
-
-      userAnswer,
-
-      at:
-        new Date()
-          .toISOString()
+    MODULE_KEYS.forEach(module => {
+      const level = state.settings.manualLevels[module];
+      state.profile.abilityByModule[module] = level;
+      state.profile.displayLevelByModule[module] = level;
+      state.profile.confidenceByModule[module] = 0.3;
+      state.profile.effectiveAttemptsByModule[module] = 0;
     });
 
     saveState();
-
-    const feedback =
-      $('answerFeedback');
-
-    feedback.classList.remove(
-      'hidden'
-    );
-
-    const statusType =
-      verdict.needsManualCheck
-
-        ? 'manual'
-
-        : verdict.correct
-          ? 'correct'
-          : 'wrong';
-
-    const statusTitle = {
-      correct:
-        '答对了',
-
-      wrong:
-        '这题需要再看一下',
-
-      manual:
-        '暂时无法自动确认'
-    }[statusType];
-
-    const statusSymbol = {
-      correct:
-        '✓',
-
-      wrong:
-        '×',
-
-      manual:
-        '?'
-    }[statusType];
-
-    const boxClass = {
-      correct:
-        'border-[#cddccf] bg-[#f6faf6]',
-
-      wrong:
-        'border-[#e7c4b7] bg-[#fff9f6]',
-
-      manual:
-        'border-[#ddd8cf] bg-[#faf9f6]'
-    }[statusType];
-
-    const titleClass = {
-      correct:
-        'text-sage',
-
-      wrong:
-        'text-clay',
-
-      manual:
-        'text-[#6f6a63]'
-    }[statusType];
-
-    feedback.innerHTML = `
-      <div
-        class="
-          rounded-xl
-          border
-          p-4
-          ${boxClass}
-        "
-      >
-
-        <div
-          class="
-            flex items-center
-            gap-2
-            text-sm
-            font-semibold
-            ${titleClass}
-          "
-        >
-
-          <span>
-            ${statusSymbol}
-          </span>
-
-          <span>
-            ${statusTitle}
-          </span>
-
-        </div>
-
-        <div
-          class="
-            mt-3
-            text-sm
-            leading-7
-            text-ink
-          "
-        >
-
-          <span class="text-muted">
-            参考答案：
-          </span>
-
-          ${escapeHTML(
-            q.answer
-          )}
-
-        </div>
-
-        ${
-          verdict.feedback
-            ? `
-              <div
-                class="
-                  mt-2
-                  text-sm
-                  leading-6
-                  text-muted
-                "
-              >
-                ${escapeHTML(
-                  verdict.feedback
-                )}
-              </div>
-            `
-            : ''
-        }
-
-        ${
-          verdict.needsManualCheck
-
-            ? `
-              <div
-                class="
-                  mt-3
-                  rounded-lg
-                  bg-white
-                  px-3 py-2.5
-                  text-xs
-                  leading-5
-                  text-muted
-                "
-              >
-                这道题不会计入正确率，也不会进入错题队列。
-              </div>
-            `
-
-            : ''
-        }
-
-        <details
-          class="
-            mt-4
-            rounded-lg
-            border border-line
-            bg-white
-            px-3.5 py-3
-          "
-        >
-
-          <summary
-            class="
-              cursor-pointer
-              text-sm
-              font-medium
-            "
-          >
-            查看解析
-          </summary>
-
-          <div
-            class="
-              mt-3
-              text-sm
-              leading-7
-              text-muted
-            "
-          >
-            ${
-              q.solution ||
-              '暂无解析。'
-            }
-          </div>
-
-        </details>
-
-        <div
-          class="
-            mt-4
-            flex
-            justify-end
-          "
-        >
-
-          <button
-            id="nextQuestionBtn"
-            class="
-              rounded-xl
-              bg-ink
-              px-4 py-2.5
-              text-sm
-              font-medium
-              text-white
-              hover:opacity-90
-            "
-          >
-
-            ${
-              session.index + 1 >=
-              session.questions.length
-
-                ? '查看结果'
-
-                : '下一题'
-            }
-
-          </button>
-
-        </div>
-
-      </div>
-    `;
-
-    button.classList.add(
-      'hidden'
-    );
-
-    $('nextQuestionBtn')
-      .addEventListener(
-        'click',
-        () => {
-          session.index +=
-            1;
-
-          if (
-            session.index >=
-            session.questions.length
-          ) {
-            finishSession(
-              session
-            );
-          }
-
-          saveState();
-
-          renderActiveSession(
-            containerId
-          );
-        }
-      );
-
-    typesetMath(
-      feedback
-    );
-
-    renderSidebarReviewBadge();
-  }
-
-  function finishSession(
-    session
-  ) {
-    session.completed =
-      true;
-
-    session.completedAt =
-      new Date()
-        .toISOString();
-
-    if (
-      session.mode ===
-      'diagnosis'
-    ) {
-      const byModule = {};
-
-      session.questions.forEach(
-        (
-          q,
-          idx
-        ) => {
-          const result =
-            session.results[
-              idx
-            ];
-
-          /*
-            manual check
-            不参与诊断分数。
-          */
-
-          if (
-            typeof result
-              ?.correct !==
-            'boolean'
-          ) {
-            return;
-          }
-
-          if (
-            !byModule[
-              q.module
-            ]
-          ) {
-            byModule[
-              q.module
-            ] = {
-              total:
-                0,
-
-              correct:
-                0
-            };
-          }
-
-          byModule[
-            q.module
-          ].total +=
-            1;
-
-          if (
-            result.correct
-          ) {
-            byModule[
-              q.module
-            ].correct +=
-              1;
-          }
-        }
-      );
-
-      Object.keys(
-        MODULES
-      )
-        .forEach(
-          m => {
-            const s =
-              byModule[m];
-
-            /*
-              如果该模块
-              没有任何可确认答案，
-              保留原难度。
-            */
-
-            if (
-              !s ||
-              !s.total
-            ) {
-              return;
-            }
-
-            const ratio =
-              s.correct /
-              s.total;
-
-            state.profile
-              .levelByModule[
-                m
-              ] =
-                ratio >=
-                0.8
-
-                  ? 3
-
-                  : ratio >=
-                    0.5
-
-                    ? 2
-
-                    : 1;
-          }
-        );
-
-      state.profile.diagnosed =
-        true;
-
-      state.profile
-        .diagnosisCompletedAt =
-          new Date()
-            .toISOString();
-    }
-
-    if (
-      session.mode ===
-      'daily'
-    ) {
-      if (
-        !state.checkins
-          .includes(
-            todayISO()
-          )
-      ) {
-        state.checkins.push(
-          todayISO()
-        );
-      }
-
-      state.dailyMeta
-        .lastCompletedDate =
-          todayISO();
-
-      state.checkins.sort();
-    }
-
-    saveState();
-  }
-
-  function renderSessionComplete(
-    container,
-    session
-  ) {
-    const judged =
-      session.results.filter(
-        r =>
-          typeof r.correct ===
-          'boolean'
-      );
-
-    const correctCount =
-      judged.filter(
-        r =>
-          r.correct
-      ).length;
-
-    const judgedCount =
-      judged.length;
-
-    const manualCount =
-      session.results.filter(
-        r =>
-          r.needsManualCheck
-      ).length;
-
-    const total =
-      session.questions.length;
-
-    const rate =
-      judgedCount
-        ? Math.round(
-            correctCount /
-            judgedCount *
-            100
-          )
-        : null;
-
-    const mode =
-      session.mode;
-
-    let extra = '';
-
-    if (
-      mode ===
-      'diagnosis'
-    ) {
-      extra = `
-        <div
-          class="
-            mt-5
-            grid gap-2
-            sm:grid-cols-3
-          "
-        >
-
-          ${
-            Object.entries(
-              state.profile
-                .levelByModule
-            )
-              .map(
-                (
-                  [
-                    m,
-                    l
-                  ]
-                ) => `
-                  <div
-                    class="
-                      rounded-xl
-                      bg-[#f7f6f2]
-                      p-3
-                      text-sm
-                    "
-                  >
-
-                    <span class="text-muted">
-                      ${moduleLabel(m)}
-                    </span>
-
-                    <span
-                      class="
-                        float-right
-                        font-semibold
-                      "
-                    >
-                      Lv.${l}
-                    </span>
-
-                  </div>
-                `
-              )
-              .join('')
-          }
-
-        </div>
-      `;
-
-    } else if (
-      mode ===
-      'daily'
-    ) {
-      extra = `
-        <div
-          class="
-            mt-5
-            rounded-xl
-            bg-sageSoft
-            px-4 py-3
-            text-sm
-            text-sage
-          "
-        >
-          ✓ 今日打卡已记录。
-          连续 ${computeStreak()} 天。
-        </div>
-      `;
-
-    } else {
-      const remaining =
-        state.reviews.filter(
-          r =>
-            r.highFreq
-        ).length;
-
-      extra = `
-        <div
-          class="
-            mt-5
-            rounded-xl
-            bg-[#f7f6f2]
-            px-4 py-3
-            text-sm
-            text-muted
-          "
-        >
-          当前仍有
-          ${remaining}
-          个考点处于高频复习队列。
-        </div>
-      `;
-    }
-
-    const scoreText =
-      judgedCount
-
-        ? (
-          `${correctCount}/${judgedCount} 已判定题目正确 · 正确率 ${rate}%`
-        )
-
-        : (
-          '本组暂无可自动确认的判题结果'
-        );
-
-    container.innerHTML = `
-      <div
-        class="
-          mx-auto
-          max-w-2xl
-          rounded-2xl
-          border border-line
-          bg-white
-          p-7
-          text-center
-          shadow-soft
-          sm:p-9
-        "
-      >
-
-        <div
-          class="
-            mx-auto
-            grid h-12 w-12
-            place-items-center
-            rounded-full
-
-            ${
-              rate === null
-                ? 'bg-[#efede8] text-muted'
-                : rate >= 70
-                  ? 'bg-sageSoft text-sage'
-                  : 'bg-claySoft text-clay'
-            }
-
-            text-xl
-          "
-        >
-
-          ${
-            rate === null
-              ? '?'
-              : rate >= 70
-                ? '✓'
-                : '↗'
-          }
-
-        </div>
-
-        <h2
-          class="
-            mt-5
-            text-2xl
-            font-semibold
-            tracking-tight
-          "
-        >
-          这一组完成了。
-        </h2>
-
-        <p
-          class="
-            mt-2
-            text-sm
-            text-muted
-          "
-        >
-          ${scoreText}
-        </p>
-
-        ${
-          manualCount
-            ? `
-              <p
-                class="
-                  mt-2
-                  text-xs
-                  text-muted
-                "
-              >
-                另有 ${manualCount} 道题暂未自动判定，
-                已从正确率统计中排除。
-              </p>
-            `
-            : ''
-        }
-
-        ${extra}
-
-        <div
-          class="
-            mt-7
-            flex flex-wrap
-            justify-center
-            gap-2
-          "
-        >
-
-          <button
-            class="
-              rounded-xl
-              border border-line
-              bg-white
-              px-4 py-2.5
-              text-sm
-              font-medium
-              hover:bg-[#faf9f6]
-            "
-            data-complete-target="dashboard"
-          >
-            回到仪表盘
-          </button>
-
-          <button
-            class="
-              rounded-xl
-              bg-ink
-              px-4 py-2.5
-              text-sm
-              font-medium
-              text-white
-              hover:opacity-90
-            "
-            data-complete-target="${
-              mode ===
-              'diagnosis'
-
-                ? 'daily'
-
-                : mode ===
-                  'daily'
-
-                  ? 'review'
-
-                  : 'dashboard'
-            }"
-          >
-
-            ${
-              mode ===
-              'diagnosis'
-
-                ? '开始今日刷题'
-
-                : mode ===
-                  'daily'
-
-                  ? '查看错题复习'
-
-                  : '完成'
-            }
-
-          </button>
-
-        </div>
-
-      </div>
-    `;
-
-    container
-      .querySelectorAll(
-        '[data-complete-target]'
-      )
-      .forEach(
-        btn =>
-          btn.addEventListener(
-            'click',
-            () => {
-              state.activeSession =
-                null;
-
-              saveState();
-
-              if (
-                mode ===
-                'diagnosis'
-              ) {
-                $('diagnosisSession')
-                  .classList.add(
-                    'hidden'
-                  );
-
-                $('diagnosisIntro')
-                  .classList.remove(
-                    'hidden'
-                  );
-              }
-
-              if (
-                mode ===
-                'daily'
-              ) {
-                $('dailySession')
-                  .classList.add(
-                    'hidden'
-                  );
-
-                $('dailyIntro')
-                  .classList.remove(
-                    'hidden'
-                  );
-              }
-
-              if (
-                mode ===
-                'review'
-              ) {
-                $('reviewSession')
-                  .classList.add(
-                    'hidden'
-                  );
-              }
-
-              switchView(
-                btn.dataset
-                  .completeTarget
-              );
-            }
-          )
-      );
-
-    renderDashboard();
+    renderAll();
+    toast('已把手动等级设为自适应起点');
   }
 
   /*
   =========================================================
-  Check-in
-  =========================================================
-  */
-
-  function renderCheckin() {
-    $('checkinStreak')
-      .textContent =
-        computeStreak();
-
-    const dates =
-      Array.from(
-        {
-          length:
-            28
-        },
-
-        (
-          _,
-          i
-        ) =>
-          dateOffsetISO(
-            i -
-            27
-          )
-      );
-
-    const set =
-      new Set(
-        state.checkins
-      );
-
-    $('monthCheckinCount')
-      .textContent =
-        `${
-          dates.filter(
-            d =>
-              set.has(d)
-          ).length
-        } 次打卡`;
-
-    $('checkinGrid')
-      .innerHTML =
-        dates
-          .map(
-            d => {
-              const hit =
-                set.has(d);
-
-              const date =
-                new Date(
-                  `${d}T12:00:00`
-                );
-
-              return `
-                <div
-                  title="${d}"
-                  class="
-                    aspect-square
-                    rounded-lg
-                    border
-
-                    ${
-                      hit
-                        ? 'border-sage/20 bg-sage text-white'
-                        : 'border-line bg-[#faf9f6] text-muted'
-                    }
-
-                    grid
-                    place-items-center
-                    text-[11px]
-                  "
-                >
-                  ${date.getDate()}
-                </div>
-              `;
-            }
-          )
-          .join('');
-  }
-
-  /*
-  =========================================================
-  Button helper
-  =========================================================
-  */
-
-  function setButtonLoading(
-    button,
-    loading,
-    label = '处理中…'
-  ) {
-    if (
-      !button
-    ) {
-      return;
-    }
-
-    if (
-      loading
-    ) {
-      button.dataset
-        .originalText =
-          button.textContent;
-
-      button.textContent =
-        label;
-
-      button.disabled =
-        true;
-
-      button.classList.add(
-        'opacity-60'
-      );
-
-    } else {
-      button.textContent =
-        button.dataset
-          .originalText ||
-        button.textContent;
-
-      button.disabled =
-        false;
-
-      button.classList.remove(
-        'opacity-60'
-      );
-    }
-  }
-
-  /*
-  =========================================================
-  Events
+  Events + init
   =========================================================
   */
 
   function bindEvents() {
-    document.addEventListener(
-      'click',
-      event => {
-        const target =
-          event.target.closest(
-            '[data-view-target]'
-          );
-
-        if (
-          target
-        ) {
-          switchView(
-            target.dataset
-              .viewTarget
-          );
-        }
+    document.addEventListener('click', event => {
+      const target = event.target.closest('[data-view-target]');
+      if (target) {
+        switchView(target.dataset.viewTarget);
       }
-    );
+    });
 
-    $('mobileMenuBtn')
-      ?.addEventListener(
-        'click',
-        () =>
-          $('sideNav')
-            .classList.toggle(
-              'hidden'
-            )
-      );
+    $('mobileMenuBtn')?.addEventListener('click', () => {
+      $('sideNav')?.classList.toggle('hidden');
+    });
 
-    $('startDiagnosisBtn')
-      ?.addEventListener(
-        'click',
-        startDiagnosis
-      );
+    $('startDiagnosisBtn')?.addEventListener('click', startDiagnosis);
+    $('startDailyBtn')?.addEventListener('click', startDaily);
+    $('startReviewBtn')?.addEventListener('click', startReview);
 
-    $('startDailyBtn')
-      ?.addEventListener(
-        'click',
-        startDaily
-      );
+    $('nextActionBtn')?.addEventListener('click', () => {
+      switchView($('nextActionBtn')?.dataset.target || 'daily');
+    });
 
-    $('startReviewBtn')
-      ?.addEventListener(
-        'click',
-        startReview
-      );
+    $$('.setting-mode-card').forEach(card => {
+      card.addEventListener('click', () => {
+        state.settings.difficultyMode = card.dataset.settingMode;
+        saveManualLevelsFromUI();
+        saveState();
+        renderAll();
 
-    $('nextActionBtn')
-      ?.addEventListener(
-        'click',
-        () =>
-          switchView(
-            $('nextActionBtn')
-              .dataset.target ||
-            'daily'
-          )
-      );
+        toast(
+          state.settings.difficultyMode === 'adaptive'
+            ? '已开启动态自适应'
+            : '已切换为固定难度'
+        );
+      });
+    });
 
-    $('resetDataBtn')
-      ?.addEventListener(
-        'click',
-        () => {
-          if (
-            !confirm(
-              '确定清空本浏览器中的全部刷题记录吗？这个操作无法撤销。'
-            )
-          ) {
-            return;
-          }
+    MODULE_KEYS.forEach(module => {
+      $(`${module}LevelRange`)?.addEventListener('input', syncManualRangeLabels);
+    });
 
-          localStorage.removeItem(
-            STORAGE_KEY
-          );
+    $$('.difficulty-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const preset = DIFFICULTY_PRESETS[btn.dataset.preset];
+        if (!preset) return;
 
-          state =
-            deepClone(
-              DEFAULT_STATE
-            );
+        MODULE_KEYS.forEach(module => {
+          const range = $(`${module}LevelRange`);
+          if (range) range.value = preset[module];
+        });
 
-          toast(
-            '本地数据已重置'
-          );
+        syncManualRangeLabels();
+      });
+    });
 
-          switchView(
-            'dashboard'
-          );
-        }
-      );
+    $('applyAsAdaptiveStartBtn')?.addEventListener('click', applyManualAsAdaptiveStart);
+
+    $('saveDifficultyBtn')?.addEventListener('click', () => {
+      saveManualLevelsFromUI();
+      saveState();
+      renderAll();
+      toast('难度设置已保存');
+    });
+
+    $$('.training-mode-card').forEach(card => {
+      card.addEventListener('click', () => {
+        state.settings.trainingMode = card.dataset.trainingMode;
+        saveState();
+        renderSettings();
+        renderDailyPreview();
+        renderDashboard();
+        toast(`训练模式：${trainingModeLabel()}`);
+      });
+    });
+
+    $('dailyCountSelect')?.addEventListener('change', () => {
+      state.settings.dailyCount = clamp(Number($('dailyCountSelect').value) || 10, 8, 12);
+      saveState();
+      renderDailyPreview();
+      renderDashboard();
+    });
+
+    $('resetDataBtn')?.addEventListener('click', () => {
+      if (!confirm('确定清空本浏览器中的全部刷题记录吗？这个操作无法撤销。')) {
+        return;
+      }
+
+      localStorage.removeItem(STORAGE_KEY);
+      state = deepClone(DEFAULT_STATE);
+      saveState();
+      toast('本地数据已重置');
+      renderAll();
+      switchView('dashboard');
+    });
   }
 
-  /*
-  =========================================================
-  Init
-  =========================================================
-  */
-
   function init() {
-    $('todayLabel')
-      .textContent =
-        formatDateCN();
+    if ($('todayLabel')) {
+      $('todayLabel').textContent = formatDateCN();
+    }
 
     bindEvents();
-
-    renderApiStatus();
-
-    switchView(
-      'dashboard'
-    );
-
+    renderAll();
+    switchView('dashboard');
     checkApiHealth();
   }
 
-  if (
-    document.readyState ===
-    'loading'
-  ) {
-    document.addEventListener(
-      'DOMContentLoaded',
-      init
-    );
-
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
-
 })();

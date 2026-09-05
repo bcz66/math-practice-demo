@@ -1,147 +1,96 @@
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
-  // =========================
-  // Health check
-  // =========================
-  if (
-    req.method === 'GET' &&
-    req.query?.health === '1'
-  ) {
-    const configured =
-      Boolean(process.env.DEEPSEEK_API_KEY);
+  if (req.method === 'GET' && req.query?.health === '1') {
+    const configured = Boolean(process.env.DEEPSEEK_API_KEY);
 
     return res
       .status(configured ? 200 : 503)
       .json({
         ok: configured,
-        service: 'deepseek'
+        service: 'deepseek',
+        adaptiveDifficultyModel: 'v0-provisional'
       });
   }
 
-  // =========================
-  // Only allow POST
-  // =========================
   if (req.method !== 'POST') {
-    return res
-      .status(405)
-      .json({
-        error: 'Method not allowed'
-      });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey =
-    process.env.DEEPSEEK_API_KEY;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
 
   if (!apiKey) {
-    return res
-      .status(500)
-      .json({
-        error:
-          'DEEPSEEK_API_KEY is not configured.'
-      });
+    return res.status(500).json({
+      error: 'DEEPSEEK_API_KEY is not configured.'
+    });
   }
 
-  const body =
-    req.body || {};
-
-  const action =
-    body.action;
+  const body = req.body || {};
+  const action = body.action;
 
   try {
     if (action === 'generate') {
-      const result =
-        await generateQuestions(
-          apiKey,
-          body
-        );
-
-      return res
-        .status(200)
-        .json(result);
+      const result = await generateQuestions(apiKey, body);
+      return res.status(200).json(result);
     }
 
     if (action === 'judge') {
-      const result =
-        await judgeAnswer(
-          apiKey,
-          body
-        );
-
-      return res
-        .status(200)
-        .json(result);
+      const result = await judgeAnswer(apiKey, body);
+      return res.status(200).json(result);
     }
 
-    return res
-      .status(400)
-      .json({
-        error: 'Unknown action'
-      });
+    if (action === 'evaluate') {
+      const result = await evaluateQuestionDifficulty(apiKey, body);
+      return res.status(200).json(result);
+    }
+
+    return res.status(400).json({ error: 'Unknown action' });
 
   } catch (error) {
-    console.error(
-      'DeepSeek API error:',
-      error
-    );
+    console.error('DeepSeek API error:', error);
 
-    return res
-      .status(500)
-      .json({
-        error:
-          error.message ||
-          'DeepSeek request failed'
-      });
+    return res.status(500).json({
+      error: error.message || 'DeepSeek request failed'
+    });
   }
 };
 
 
-// =======================================================
-// DeepSeek request
-// =======================================================
+/*
+=========================================================
+DeepSeek request
+=========================================================
+*/
 
 async function callDeepSeek(
   apiKey,
   messages,
-  maxTokens = 5000
+  maxTokens = 5000,
+  temperature = 0.35
 ) {
-  const response =
-    await fetch(
-      'https://api.deepseek.com/chat/completions',
-      {
-        method: 'POST',
+  const response = await fetch(
+    'https://api.deepseek.com/chat/completions',
+    {
+      method: 'POST',
 
-        headers: {
-          'Content-Type':
-            'application/json',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
 
-          Authorization:
-            `Bearer ${apiKey}`
+      body: JSON.stringify({
+        model: 'deepseek-v4-flash',
+        messages,
+        response_format: {
+          type: 'json_object'
         },
+        temperature,
+        max_tokens: maxTokens
+      })
+    }
+  );
 
-        body:
-          JSON.stringify({
-            model:
-              'deepseek-v4-flash',
-
-            messages,
-
-            response_format: {
-              type:
-                'json_object'
-            },
-
-            temperature:
-              0.5,
-
-            max_tokens:
-              maxTokens
-          })
-      }
-    );
-
-  const data =
-    await response.json();
+  const data = await response.json();
 
   if (!response.ok) {
     throw new Error(
@@ -150,185 +99,514 @@ async function callDeepSeek(
     );
   }
 
-  const content =
-    data?.choices?.[0]
-      ?.message?.content;
+  const content = data?.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error(
-      'DeepSeek returned empty content.'
-    );
+    throw new Error('DeepSeek returned empty content.');
   }
 
   try {
     return JSON.parse(content);
 
   } catch {
-    const cleaned =
-      content
-        .replace(
-          /^```json\s*/i,
-          ''
-        )
-        .replace(
-          /```$/i,
-          ''
-        )
-        .trim();
+    const cleaned = content
+      .replace(/^```json\s*/i, '')
+      .replace(/```$/i, '')
+      .trim();
 
     return JSON.parse(cleaned);
   }
 }
 
 
-// =======================================================
-// Generate questions
-// =======================================================
+/*
+=========================================================
+Provisional difficulty scale
 
-async function generateQuestions(
-  apiKey,
-  body
-) {
+注意：
+这是临时 Soft Anchor，不是真实考研/竞赛标尺。
+未来真实 Anchor 进入后，前端 Calibration Layer 会重映射。
+=========================================================
+*/
+
+const LEVEL_SCALE = {
+  1: {
+    name: '教材入门',
+    description: '单公式、一步计算、识别几乎无成本。'
+  },
+  2: {
+    name: '教材基础',
+    description: '单一方法，轻微变形，通常 1–2 个关键步骤。'
+  },
+  3: {
+    name: '教材熟练',
+    description: '常见题型，通常 2–3 个关键步骤。'
+  },
+  4: {
+    name: '考研基础',
+    description: '考研高频基础计算，方法较明确。'
+  },
+  5: {
+    name: '考研标准偏易',
+    description: '需要基本方法选择并完成若干代数变形。'
+  },
+  6: {
+    name: '考研标准',
+    description: '方法选择 + 多步计算，识别与运算均有要求。'
+  },
+  7: {
+    name: '考研中上',
+    description: '存在明显技巧，方法不完全暴露，容易在识别或中间步骤失误。'
+  },
+  8: {
+    name: '考研高难',
+    description: '多技巧组合，识别成本高，计算或结构处理明显复杂。'
+  },
+  9: {
+    name: '考研极难',
+    description: '复杂极限/积分/导数技巧或综合计算，接近考研计算题高难上沿。'
+  },
+  10: {
+    name: '竞赛入门挑战',
+    description: '明显高于普通考研训练，具有竞赛型微积分计算与结构洞察。'
+  },
+  11: {
+    name: '竞赛中高难',
+    description: '技巧性、构造性和方法识别要求较高，但仍保持可判定的计算型任务。'
+  },
+  12: {
+    name: '竞赛挑战',
+    description: '高强度微积分计算与洞察，允许非常复杂的技巧组合，但本产品暂不出纯证明题。'
+  }
+};
+
+function scaleText() {
+  return Object.entries(LEVEL_SCALE)
+    .map(([level, item]) => `L${level} ${item.name}：${item.description}`)
+    .join('\n');
+}
+
+function moduleGuidance(module) {
+  const common = `
+难度不能只靠“计算长”来制造。
+至少综合考虑：
+- recognition：方法识别难度
+- techniqueDepth：需要叠加多少层方法/技巧
+- calculationComplexity：运算长度与复杂度
+- knowledgeCoupling：多个知识点耦合程度
+`;
+
+  if (module === 'limit') {
+    return `
+模块：极限。
+可使用的难度来源包括但不限于：
+等价无穷小、重要极限、洛必达、泰勒展开、变量替换、
+主导项判断、分段/参数极限、数列或函数极限结构识别、多方法组合。
+高等级不能只靠把数字写得很丑。
+${common}
+`;
+  }
+
+  if (module === 'derivative') {
+    return `
+模块：导数。
+可使用的难度来源包括但不限于：
+复合函数、隐函数、参数方程、高阶导数、对数求导、
+多层链式结构、复杂乘除组合、局部结构识别。
+高等级应增加方法识别和结构深度，而不是单纯堆运算。
+${common}
+`;
+  }
+
+  return `
+模块：积分。
+可使用的难度来源包括但不限于：
+换元、分部积分、有理函数、三角积分、定积分技巧、反常积分、
+参数结构、多种换元组合、对称性与结构识别。
+L8 以上允许明显复杂；L10–L12 可进入竞赛型微积分计算与技巧，
+但仍要求有明确标准答案，暂不生成纯证明题。
+${common}
+`;
+}
+
+
+/*
+=========================================================
+Generate + independent difficulty evaluation
+=========================================================
+*/
+
+async function generateQuestions(apiKey, body) {
   const {
-    count = 9,
-
-    modules = [
-      'limit',
-      'derivative',
-      'integral'
-    ],
-
-    distribution = {},
-
-    focusModules = [],
-
-    topics = [],
-
+    count = 1,
+    plans = [],
     avoidPrompts = [],
-
-    difficultyByModule = {},
-
-    purpose = 'daily'
-
+    difficultyModelVersion = 'v0-provisional'
   } = body;
 
-  const prompt = `
-你是一名中国考研数学高等数学基础训练出题器。
+  const cleanPlans = Array.isArray(plans) && plans.length
+    ? plans.slice(0, Math.max(1, Number(count) || 1))
+    : [{
+        module: 'limit',
+        topic: null,
+        targetDifficulty: 6,
+        purpose: 'daily',
+        zone: 'target'
+      }];
 
-请生成 ${count} 道基础计算题。
+  const planText = cleanPlans
+    .map((plan, index) => {
+      const module = ['limit', 'derivative', 'integral'].includes(plan.module)
+        ? plan.module
+        : 'limit';
 
-只允许以下模块：
+      const targetDifficulty = Math.max(
+        1,
+        Math.min(12, Number(plan.targetDifficulty) || 6)
+      );
 
-limit = 极限
-derivative = 导数
-integral = 积分
+      return `
+题目 ${index + 1}
+module: ${module}
+topic: ${plan.topic || '由你在模块内选择合适考点'}
+targetDifficulty: ${targetDifficulty}
+purpose: ${plan.purpose || 'daily'}
+zone: ${plan.zone || plan.purpose || 'target'}
+reviewId: ${plan.reviewId || 'null'}
 
-本次允许模块：
-${JSON.stringify(modules)}
+${plan.referenceQuestion
+  ? `
+这是错题复习。必须生成“同考点变式”，禁止直接复制原题：
+原题说明：${plan.referenceQuestion.instruction || ''}
+原题表达式：${plan.referenceQuestion.expression || plan.referenceQuestion.prompt || ''}
+原题答案：${plan.referenceQuestion.answer || ''}
+`
+  : ''
+}
 
-训练用途：
-${purpose}
+${moduleGuidance(module)}
+`;
+    })
+    .join('\n\n-----------------\n\n');
 
-模块数量要求：
-${JSON.stringify(distribution)}
+  const generationPrompt = `
+你是 CalcDaily 的中国考研高数训练出题器。
 
-优先训练模块：
-${JSON.stringify(focusModules)}
+当前难度模型版本：
+${difficultyModelVersion}
 
-薄弱考点：
-${JSON.stringify(topics)}
+重要：
+目前 L1–L12 是“临时 Soft Anchor”，不是权威真题标尺。
+你要尽量按照下面的相对难度定义生成，不要自行缩成 L1–L5。
 
-当前模块难度：
-${JSON.stringify(difficultyByModule)}
+【L1–L12 临时难度标尺】
+${scaleText()}
 
-请避免与以下题目重复：
+【本次出题计划】
+${planText}
+
+【必须遵守的数学范围】
+只允许：
+- limit：极限
+- derivative：导数
+- integral：积分
+
+不生成：
+- 线性代数
+- 概率论
+- 与上述范围无关的内容
+- 纯证明题
+- 无明确答案的开放题
+
+【手机端显示规则，非常重要】
+必须把“文字说明”和“数学表达式”分开返回：
+
+instruction:
+只写自然语言，例如：
+"计算极限"
+"求导"
+"计算不定积分"
+"已知曲线，求 dy/dx"
+
+expression:
+只写 LaTeX 数学表达式本体。
+不要写 Markdown。
+不要加 \\\\( \\\\)、\\\\[ \\\\]、$ 或 $$。
+例如：
+"\\\\lim_{x\\\\to0}\\\\frac{\\\\sin 3x}{2x}"
+"y=\\\\ln(1+x^2)"
+"\\\\int_0^1 x e^x\\\\,dx"
+
+这样前端会统一使用 MathJax display mode 渲染，
+禁止把裸 LaTeX 混在中文句子里。
+
+【solution 规则】
+solution 是简洁解析。
+solution 中每一个数学表达式必须使用 \\\\( ... \\\\) 包裹。
+不要输出 Markdown code fence。
+
+【难度规则】
+- difficulty 字段先写“目标难度”，范围 1–12。
+- 不得因为 targetDifficulty 高就机械拉长式子。
+- 高等级优先增加方法识别、技巧深度、知识耦合和结构洞察。
+- L10–L12 可以高于普通考研，但仍限定为微积分计算/技巧题。
+- 每题必须有明确、可判定的标准答案。
+- 不定积分必须考虑积分常数 C。
+
+【避免重复】
+尽量避免与以下近期题目高度相似：
 ${JSON.stringify(avoidPrompts.slice(0, 10))}
 
-要求：
-
-1. 只训练考研高数基础计算能力。
-2. 不出现线性代数、概率论、证明题和大型综合题。
-3. 难度范围为 1 到 5。
-4. 每道题必须具有明确标准答案。
-5. 错题复习时必须生成同考点变式题，而不是重复原题。
-6. 数学表达式使用 LaTeX。
-7. 不定积分必须考虑积分常数 C。
-8. solution 必须简洁解释关键步骤。
-9. 不要输出 Markdown。
-10. 严格输出 JSON。
-
-JSON 格式：
+严格返回 JSON：
 
 {
   "questions": [
     {
-      "id": "optional",
       "module": "limit",
-      "topic": "等价无穷小",
-      "difficulty": 2,
-      "prompt": "题目",
-      "answer": "标准答案",
-      "solution": "解析",
-      "keySteps": [
-        "步骤1",
-        "步骤2"
-      ]
+      "topic": "泰勒展开",
+      "difficulty": 7,
+      "selfEstimatedDifficulty": 7.0,
+      "difficultyDimensions": {
+        "recognition": 7,
+        "techniqueDepth": 7,
+        "calculationComplexity": 6,
+        "knowledgeCoupling": 7
+      },
+      "instruction": "计算极限",
+      "expression": "\\\\lim_{x\\\\to0}...",
+      "answer": "1/2",
+      "solution": "利用 \\\\( ... \\\\) ...",
+      "keySteps": ["步骤1", "步骤2"]
     }
   ]
 }
+
+questions 数量必须为 ${cleanPlans.length}。
 `;
 
-  const result =
-    await callDeepSeek(
-      apiKey,
+  const generated = await callDeepSeek(
+    apiKey,
+    [
+      {
+        role: 'system',
+        content:
+          '你负责生成可靠、可核验、适合中国考研与高阶微积分训练的题目。严格返回 JSON。'
+      },
+      {
+        role: 'user',
+        content: generationPrompt
+      }
+    ],
+    7000,
+    0.45
+  );
 
-      [
-        {
-          role: 'system',
-
-          content:
-            '你负责生成可靠、可核验的中国考研高数基础计算题。必须严格返回 JSON。'
-        },
-
-        {
-          role: 'user',
-
-          content:
-            prompt
-        }
-      ],
-
-      7000
-    );
-
-  if (
-    !Array.isArray(
-      result.questions
-    )
-  ) {
-    throw new Error(
-      'Invalid questions returned by DeepSeek.'
-    );
+  if (!Array.isArray(generated.questions)) {
+    throw new Error('Invalid questions returned by DeepSeek.');
   }
 
-  return {
-    questions:
-      result.questions.slice(
-        0,
-        count
+  const questions = generated.questions
+    .slice(0, cleanPlans.length)
+    .map((q, index) => ({
+      ...q,
+      module: ['limit', 'derivative', 'integral'].includes(q.module)
+        ? q.module
+        : cleanPlans[index]?.module || 'limit',
+      difficulty: Math.max(
+        1,
+        Math.min(12, Number(q.difficulty) || Number(cleanPlans[index]?.targetDifficulty) || 6)
       )
+    }));
+
+  /*
+  生成接口先快速返回。
+  独立难度评估通过 action=evaluate 单独调用：
+  - diagnosis：前端会等待评估后再展示；
+  - daily/review：前端先展示题目，再后台补充评估，避免每题等待两次模型调用。
+  */
+
+  const merged = questions.map((q, index) => {
+    const requested =
+      Number(cleanPlans[index]?.targetDifficulty) ||
+      Number(q.difficulty) ||
+      6;
+
+    const selfEstimatedDifficulty = Math.max(
+      1,
+      Math.min(
+        12,
+        Number(q.selfEstimatedDifficulty) ||
+        Number(q.difficulty) ||
+        requested
+      )
+    );
+
+    return {
+      ...q,
+      provisionalDifficulty: selfEstimatedDifficulty,
+      estimatedDifficulty: selfEstimatedDifficulty,
+      difficultyConfidence: 0.4,
+      difficultyDimensions: q.difficultyDimensions || {
+        recognition: selfEstimatedDifficulty,
+        techniqueDepth: selfEstimatedDifficulty,
+        calculationComplexity: selfEstimatedDifficulty,
+        knowledgeCoupling: Math.max(1, selfEstimatedDifficulty - 1)
+      }
+    };
+  });
+
+  return {
+    difficultyModelVersion,
+    questions: merged
   };
 }
 
+async function evaluateQuestionDifficulty(apiKey, body) {
+  const question = body.question;
 
-// =======================================================
-// Judge answer
-// =======================================================
+  if (!question) {
+    throw new Error('Missing question for difficulty evaluation.');
+  }
 
-async function judgeAnswer(
-  apiKey,
-  body
-) {
+  const plan = body.plan || {
+    targetDifficulty:
+      question.requestedDifficulty ??
+      question.difficulty ??
+      question.provisionalDifficulty ??
+      6
+  };
+
+  const evaluations = await evaluateDifficultyBatch(
+    apiKey,
+    [question],
+    [plan]
+  );
+
+  const evaluation = evaluations[0] || {};
+
+  return {
+    estimatedDifficulty: clamp12(
+      Number(evaluation.estimatedDifficulty) ||
+      Number(question.provisionalDifficulty) ||
+      Number(plan.targetDifficulty) ||
+      6
+    ),
+    recognition: clamp12(
+      Number(evaluation.recognition) ||
+      Number(question.provisionalDifficulty) ||
+      6
+    ),
+    techniqueDepth: clamp12(
+      Number(evaluation.techniqueDepth) ||
+      Number(question.provisionalDifficulty) ||
+      6
+    ),
+    calculationComplexity: clamp12(
+      Number(evaluation.calculationComplexity) ||
+      Number(question.provisionalDifficulty) ||
+      6
+    ),
+    knowledgeCoupling: clamp12(
+      Number(evaluation.knowledgeCoupling) ||
+      Math.max(1, Number(question.provisionalDifficulty) - 1) ||
+      5
+    ),
+    confidence: clamp01(
+      Number(evaluation.confidence) ||
+      0.55
+    )
+  };
+}
+
+async function evaluateDifficultyBatch(apiKey, questions, plans) {
+  const compact = questions.map((q, index) => ({
+    index,
+    requestedDifficulty: plans[index]?.targetDifficulty ?? q.difficulty,
+    module: q.module,
+    topic: q.topic,
+    instruction: q.instruction,
+    expression: q.expression,
+    solution: q.solution
+  }));
+
+  const evaluatorPrompt = `
+你是 CalcDaily 的“独立难度评估器”。
+
+生成器声称题目属于某个目标难度，但你不能直接相信。
+请根据题目本身，在 L1–L12 临时 Soft Anchor 上重新估计难度。
+
+【难度标尺】
+${scaleText()}
+
+评估四个维度，范围都为 1–12：
+1. recognition：方法识别难度
+2. techniqueDepth：方法/技巧叠加深度
+3. calculationComplexity：计算复杂度
+4. knowledgeCoupling：知识点耦合程度
+
+overall estimatedDifficulty 不是简单平均。
+如果题目只是运算长但方法显然，不应被评成高难。
+如果运算短但方法识别和洞察要求高，可以是高难。
+
+这是临时标尺。
+不要宣称它等于真实考研或竞赛难度。
+
+待评估题目：
+${JSON.stringify(compact)}
+
+严格返回：
+
+{
+  "evaluations": [
+    {
+      "index": 0,
+      "estimatedDifficulty": 7.2,
+      "recognition": 8,
+      "techniqueDepth": 7,
+      "calculationComplexity": 6,
+      "knowledgeCoupling": 7,
+      "confidence": 0.72
+    }
+  ]
+}
+
+evaluations 必须与输入题目一一对应。
+`;
+
+  const result = await callDeepSeek(
+    apiKey,
+    [
+      {
+        role: 'system',
+        content:
+          '你只负责独立评估微积分题目难度，不负责迎合生成器给出的目标等级。严格返回 JSON。'
+      },
+      {
+        role: 'user',
+        content: evaluatorPrompt
+      }
+    ],
+    3500,
+    0.15
+  );
+
+  if (!Array.isArray(result.evaluations)) {
+    throw new Error('Invalid difficulty evaluations.');
+  }
+
+  return questions.map((_, index) => {
+    return result.evaluations.find(item => Number(item.index) === index) || {};
+  });
+}
+
+
+/*
+=========================================================
+Judge answer
+=========================================================
+*/
+
+async function judgeAnswer(apiKey, body) {
   const {
     question,
     userAnswer
@@ -336,42 +614,37 @@ async function judgeAnswer(
 
   if (
     !question ||
-    typeof userAnswer !==
-      'string'
+    typeof userAnswer !== 'string'
   ) {
-    throw new Error(
-      'Missing question or user answer.'
-    );
+    throw new Error('Missing question or user answer.');
   }
 
+  const questionText = question.instruction && question.expression
+    ? `${question.instruction}\n${question.expression}`
+    : question.prompt || '';
+
   const prompt = `
-你是一名考研数学答案等价性判题器。
+你是一名严谨的高等数学答案等价性判题器。
 
 你的任务不是比较字符串，
 而是判断学生答案和标准答案在数学意义上是否等价。
 
 题目：
-
-${question.prompt}
+${questionText}
 
 模块：
-
 ${question.module}
 
 考点：
-
 ${question.topic}
 
 标准答案：
-
 ${question.answer}
 
 参考解析：
-
 ${question.solution}
 
 学生答案：
-
 ${userAnswer}
 
 判题规则：
@@ -379,71 +652,52 @@ ${userAnswer}
 1. 必须按照数学意义判断，不能因为字符串不同判错。
 
 例如：
-
 1/2
 0.5
 二分之一
 50%
 
-在相应数学语境下应视为等价。
+在相应数学语境下可视为等价。
 
 2. 必须忽略：
-
 - 普通空格
 - 全角空格
 - 括号格式差异
 - LaTeX 与普通文本差异
 
 例如：
-
 2x/(1+x^2)
-
 和
-
 2x / (1 + x^2)
-
 完全等价。
 
 3. 必须识别代数等价。
 
 例如：
-
 2x/(1+x^2)
-
 和
-
 2x/(x^2+1)
-
 应判为正确。
 
 4. 必须识别等价因式分解形式。
 
 例如：
-
 e^x(x^2+2x)
-
 和
-
 x e^x(x+2)
-
 数学上等价，应判正确。
 
 5. 不定积分：
-
 如果学生答案与标准答案仅相差积分常数，
 应视为正确。
 
-6. 如果学生使用中文表达一个明确数学值，
-也应该根据数学意义判断。
+6. 如果学生使用中文表达明确数学值，
+应按数学意义判断。
 
-例如：
+7. 不允许仅通过字符串完全匹配判断。
 
-二分之一 = 1/2
-
-7. 不允许仅通过字符串完全匹配进行判断。
-
-8. 若无法可靠确认数学等价，
-不要猜测。
+8. 如果学生表达含糊、数学上不成立或与标准答案不等价，
+判错并简短指出原因。
 
 严格返回：
 
@@ -460,39 +714,44 @@ x e^x(x+2)
 }
 `;
 
-  const result =
-    await callDeepSeek(
-      apiKey,
+  const result = await callDeepSeek(
+    apiKey,
+    [
+      {
+        role: 'system',
+        content:
+          '你是严谨的高等数学答案等价性判题器。判断数学等价关系，而不是字符串匹配。严格返回 JSON。'
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ],
+    1200,
+    0.1
+  );
 
-      [
-        {
-          role: 'system',
-
-          content:
-            '你是严谨的高等数学答案等价性判题器。你的任务是判断数学等价关系，而不是字符串匹配。严格返回 JSON。'
-        },
-
-        {
-          role: 'user',
-
-          content:
-            prompt
-        }
-      ],
-
-      1200
-    );
+  if (typeof result.correct !== 'boolean') {
+    throw new Error('Invalid judge result.');
+  }
 
   return {
-    correct:
-      Boolean(
-        result.correct
-      ),
-
-    feedback:
-      String(
-        result.feedback ||
-        ''
-      )
+    correct: result.correct,
+    feedback: String(result.feedback || '')
   };
+}
+
+
+/*
+=========================================================
+Small helpers
+=========================================================
+*/
+
+function clamp01(n) {
+  return Math.max(0, Math.min(1, Number(n) || 0));
+}
+
+function clamp12(n) {
+  return Math.max(1, Math.min(12, Number(n) || 6));
 }
