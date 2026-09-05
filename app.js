@@ -8,10 +8,12 @@
       label: '极限',
       color: '#c96545'
     },
+
     derivative: {
       label: '导数',
       color: '#627a66'
     },
+
     integral: {
       label: '积分',
       color: '#88705c'
@@ -75,47 +77,74 @@
 
   let apiHealthy = null;
 
-  const $ = (id) => document.getElementById(id);
+  const $ = id =>
+    document.getElementById(id);
 
-  const $$ = (selector) =>
-    Array.from(document.querySelectorAll(selector));
+  const $$ = selector =>
+    Array.from(
+      document.querySelectorAll(selector)
+    );
 
   function deepClone(obj) {
-    return JSON.parse(JSON.stringify(obj));
+    return JSON.parse(
+      JSON.stringify(obj)
+    );
   }
 
   function loadState() {
     try {
       const raw =
-        localStorage.getItem(STORAGE_KEY);
+        localStorage.getItem(
+          STORAGE_KEY
+        );
 
       if (!raw) {
-        return deepClone(DEFAULT_STATE);
+        return deepClone(
+          DEFAULT_STATE
+        );
       }
 
       const parsed =
         JSON.parse(raw);
 
       return {
-        ...deepClone(DEFAULT_STATE),
+        ...deepClone(
+          DEFAULT_STATE
+        ),
+
         ...parsed,
 
         profile: {
-          ...deepClone(DEFAULT_STATE.profile),
+          ...deepClone(
+            DEFAULT_STATE.profile
+          ),
+
           ...(parsed.profile || {})
         },
 
         stats: {
-          ...deepClone(DEFAULT_STATE.stats),
+          ...deepClone(
+            DEFAULT_STATE.stats
+          ),
+
           ...(parsed.stats || {}),
 
           byModule: {
-            ...deepClone(DEFAULT_STATE.stats.byModule),
-            ...((parsed.stats || {}).byModule || {})
+            ...deepClone(
+              DEFAULT_STATE.stats.byModule
+            ),
+
+            ...(
+              (parsed.stats || {})
+                .byModule || {}
+            )
           },
 
           byTopic: {
-            ...((parsed.stats || {}).byTopic || {})
+            ...(
+              (parsed.stats || {})
+                .byTopic || {}
+            )
           }
         }
       };
@@ -126,7 +155,9 @@
         error
       );
 
-      return deepClone(DEFAULT_STATE);
+      return deepClone(
+        DEFAULT_STATE
+      );
     }
   }
 
@@ -138,24 +169,34 @@
   }
 
   function todayISO() {
-    const d = new Date();
+    const d =
+      new Date();
 
     const y =
       d.getFullYear();
 
     const m =
-      String(d.getMonth() + 1)
-        .padStart(2, '0');
+      String(
+        d.getMonth() + 1
+      ).padStart(
+        2,
+        '0'
+      );
 
     const day =
-      String(d.getDate())
-        .padStart(2, '0');
+      String(
+        d.getDate()
+      ).padStart(
+        2,
+        '0'
+      );
 
     return `${y}-${m}-${day}`;
   }
 
   function addDaysISO(days) {
-    const d = new Date();
+    const d =
+      new Date();
 
     d.setHours(
       12,
@@ -165,25 +206,35 @@
     );
 
     d.setDate(
-      d.getDate() + days
+      d.getDate() +
+      days
     );
 
     const y =
       d.getFullYear();
 
     const m =
-      String(d.getMonth() + 1)
-        .padStart(2, '0');
+      String(
+        d.getMonth() + 1
+      ).padStart(
+        2,
+        '0'
+      );
 
     const day =
-      String(d.getDate())
-        .padStart(2, '0');
+      String(
+        d.getDate()
+      ).padStart(
+        2,
+        '0'
+      );
 
     return `${y}-${m}-${day}`;
   }
 
   function dateOffsetISO(offset) {
-    const d = new Date();
+    const d =
+      new Date();
 
     d.setHours(
       12,
@@ -193,19 +244,28 @@
     );
 
     d.setDate(
-      d.getDate() + offset
+      d.getDate() +
+      offset
     );
 
     const y =
       d.getFullYear();
 
     const m =
-      String(d.getMonth() + 1)
-        .padStart(2, '0');
+      String(
+        d.getMonth() + 1
+      ).padStart(
+        2,
+        '0'
+      );
 
     const day =
-      String(d.getDate())
-        .padStart(2, '0');
+      String(
+        d.getDate()
+      ).padStart(
+        2,
+        '0'
+      );
 
     return `${y}-${m}-${day}`;
   }
@@ -253,7 +313,9 @@
   ) {
     return attempts
       ? Math.round(
-          (correct / attempts) * 100
+          correct /
+          attempts *
+          100
         )
       : null;
   }
@@ -326,6 +388,10 @@
     const el =
       $('toast');
 
+    if (!el) {
+      return;
+    }
+
     el.textContent =
       message;
 
@@ -390,7 +456,9 @@
           () => ({})
         );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       throw new Error(
         data.error ||
         `AI 请求失败 (${response.status})`
@@ -462,8 +530,13 @@
     }
   }
 
-  const FALLBACK_BANK = [
+  /*
+  =========================================================
+  本地备用题
+  =========================================================
+  */
 
+  const FALLBACK_BANK = [
     {
       module: 'limit',
       topic: '等价无穷小',
@@ -506,7 +579,7 @@
         '1/2',
 
       solution:
-        '可用泰勒展开 \\(e^x=1+x+\\frac{x^2}{2}+o(x^2)\\)，故极限为 \\(\\frac12\\)。'
+        '利用泰勒展开 \\(e^x=1+x+\\frac{x^2}{2}+o(x^2)\\)，故极限为 \\(\\frac12\\)。'
     },
 
     {
@@ -602,12 +675,15 @@
 
   function buildFallbackQuestions({
     count = 9,
+
     modules = [
       'limit',
       'derivative',
       'integral'
     ],
+
     topics = []
+
   } = {}) {
 
     let pool =
@@ -635,15 +711,16 @@
       if (
         matched.length
       ) {
-        pool =
-          matched.concat(
-            pool.filter(
-              q =>
-                !topicSet.has(
-                  q.topic
-                )
-            )
-          );
+        pool = [
+          ...matched,
+
+          ...pool.filter(
+            q =>
+              !topicSet.has(
+                q.topic
+              )
+          )
+        ];
       }
     }
 
@@ -700,60 +777,59 @@
 
       renderApiStatus();
 
-      return data.questions
-        .map(
-          q => ({
-            id:
-              q.id ||
-              uid('ai'),
+      return data.questions.map(
+        q => ({
+          id:
+            q.id ||
+            uid('ai'),
 
-            module:
-              [
-                'limit',
-                'derivative',
-                'integral'
-              ].includes(
-                q.module
-              )
-                ? q.module
-                : 'limit',
+          module:
+            [
+              'limit',
+              'derivative',
+              'integral'
+            ].includes(
+              q.module
+            )
+              ? q.module
+              : 'limit',
 
-            topic:
-              q.topic ||
-              '综合基础',
+          topic:
+            q.topic ||
+            '综合基础',
 
-            difficulty:
-              clamp(
-                Number(
-                  q.difficulty
-                ) || 1,
-                1,
-                5
-              ),
+          difficulty:
+            clamp(
+              Number(
+                q.difficulty
+              ) || 1,
+              1,
+              5
+            ),
 
-            prompt:
-              q.prompt ||
-              '',
+          prompt:
+            q.prompt ||
+            '',
 
-            answer:
-              q.answer ||
-              '',
+          answer:
+            q.answer ||
+            '',
 
-            solution:
-              q.solution ||
-              '',
+          solution:
+            q.solution ||
+            '',
 
-            keySteps:
-              Array.isArray(
-                q.keySteps
-              )
-                ? q.keySteps
-                : [],
+          keySteps:
+            Array.isArray(
+              q.keySteps
+            )
+              ? q.keySteps
+              : [],
 
-            source:
-              'ai'
-          })
-        );
+          source:
+            'ai'
+        })
+      );
 
     } catch (error) {
       console.warn(
@@ -775,64 +851,715 @@
     }
   }
 
-  function normalizeAnswer(
-    value
+  /*
+  =========================================================
+  新版答案判定
+  =========================================================
+  */
+
+  const CHINESE_DIGITS = {
+    零: 0,
+    〇: 0,
+    一: 1,
+    二: 2,
+    两: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9
+  };
+
+  /*
+    将常见中文数字转成数字。
+
+    支持：
+    一
+    二
+    十
+    十二
+    二十
+    二十五
+    一百
+    一百二十
+    一百二十三
+  */
+
+  function chineseIntegerToNumber(
+    text
   ) {
-    return String(
-      value ||
-      ''
-    )
-      .toLowerCase()
+    if (
+      !text
+    ) {
+      return null;
+    }
 
-      .replace(
-        /\\left|\\right/g,
+    if (
+      /^[零〇一二两三四五六七八九]$/
+        .test(text)
+    ) {
+      return CHINESE_DIGITS[text];
+    }
+
+    let total = 0;
+    let current = 0;
+    let seen = false;
+
+    for (
+      const char
+      of text
+    ) {
+      if (
+        char in
+        CHINESE_DIGITS
+      ) {
+        current =
+          CHINESE_DIGITS[
+            char
+          ];
+
+        seen =
+          true;
+
+        continue;
+      }
+
+      if (
+        char === '十'
+      ) {
+        seen =
+          true;
+
+        total +=
+          (
+            current ||
+            1
+          ) *
+          10;
+
+        current =
+          0;
+
+        continue;
+      }
+
+      if (
+        char === '百'
+      ) {
+        seen =
+          true;
+
+        total +=
+          (
+            current ||
+            1
+          ) *
+          100;
+
+        current =
+          0;
+
+        continue;
+      }
+
+      return null;
+    }
+
+    if (
+      !seen
+    ) {
+      return null;
+    }
+
+    return (
+      total +
+      current
+    );
+  }
+
+  function replaceChineseFractions(
+    input
+  ) {
+    let s =
+      String(input);
+
+    /*
+      例如：
+
+      二分之一
+      ↓
+      1/2
+
+      三分之二
+      ↓
+      2/3
+
+      百分之五十
+      ↓
+      50/100
+    */
+
+    s =
+      s.replace(
+        /([零〇一二两三四五六七八九十百]+)分之([零〇一二两三四五六七八九十百]+)/g,
+
+        (
+          match,
+          denominatorText,
+          numeratorText
+        ) => {
+          const denominator =
+            chineseIntegerToNumber(
+              denominatorText
+            );
+
+          const numerator =
+            chineseIntegerToNumber(
+              numeratorText
+            );
+
+          if (
+            denominator === null ||
+            numerator === null ||
+            denominator === 0
+          ) {
+            return match;
+          }
+
+          return (
+            `${numerator}/${denominator}`
+          );
+        }
+      );
+
+    s =
+      s.replace(
+        /一半/g,
+        '1/2'
+      );
+
+    return s;
+  }
+
+  function convertLatexFractions(
+    input
+  ) {
+    let s =
+      input;
+
+    /*
+      \frac{1}{2}
+      ↓
+      (1)/(2)
+    */
+
+    for (
+      let i = 0;
+      i < 4;
+      i++
+    ) {
+      const before =
+        s;
+
+      s =
+        s.replace(
+          /\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+          '($1)/($2)'
+        );
+
+      if (
+        before === s
+      ) {
+        break;
+      }
+    }
+
+    return s;
+  }
+
+  function normalizeAnswer(
+    value = ''
+  ) {
+    let s =
+      String(value)
+        .toLowerCase();
+
+    /*
+      Unicode / invisible spaces
+    */
+
+    s =
+      s.replace(
+        /[\u00A0\u1680\u180E\u2000-\u200D\u202F\u205F\u2060\u3000\uFEFF]/g,
         ''
-      )
+      );
 
-      .replace(
-        /\\,/g,
-        ''
-      )
+    /*
+      中文 / 全角符号
+    */
 
-      .replace(
+    s =
+      s
+        .replace(
+          /（/g,
+          '('
+        )
+
+        .replace(
+          /）/g,
+          ')'
+        )
+
+        .replace(
+          /＋/g,
+          '+'
+        )
+
+        .replace(
+          /[－−–—]/g,
+          '-'
+        )
+
+        .replace(
+          /×/g,
+          '*'
+        )
+
+        .replace(
+          /÷/g,
+          '/'
+        )
+
+        .replace(
+          /，/g,
+          ','
+        )
+
+        .replace(
+          /。/g,
+          ''
+        );
+
+    /*
+      Unicode 常用数学字符
+    */
+
+    s =
+      s
+        .replace(
+          /²/g,
+          '^2'
+        )
+
+        .replace(
+          /³/g,
+          '^3'
+        )
+
+        .replace(
+          /½/g,
+          '1/2'
+        )
+
+        .replace(
+          /⅓/g,
+          '1/3'
+        )
+
+        .replace(
+          /⅔/g,
+          '2/3'
+        )
+
+        .replace(
+          /¼/g,
+          '1/4'
+        )
+
+        .replace(
+          /¾/g,
+          '3/4'
+        );
+
+    /*
+      中文分数
+    */
+
+    s =
+      replaceChineseFractions(
+        s
+      );
+
+    /*
+      LaTeX
+    */
+
+    s =
+      s
+        .replace(
+          /\\left/g,
+          ''
+        )
+
+        .replace(
+          /\\right/g,
+          ''
+        )
+
+        .replace(
+          /\\,/g,
+          ''
+        )
+
+        .replace(
+          /\\!/g,
+          ''
+        )
+
+        .replace(
+          /\\;/g,
+          ''
+        )
+
+        .replace(
+          /\\:/g,
+          ''
+        )
+
+        .replace(
+          /\\cdot/g,
+          '*'
+        )
+
+        .replace(
+          /\\times/g,
+          '*'
+        );
+
+    s =
+      convertLatexFractions(
+        s
+      );
+
+    /*
+      sqrt
+    */
+
+    s =
+      s.replace(
+        /\\sqrt\s*\{([^{}]+)\}/g,
+        'sqrt($1)'
+      );
+
+    /*
+      剩余的大括号
+    */
+
+    s =
+      s
+        .replace(
+          /\{/g,
+          '('
+        )
+
+        .replace(
+          /\}/g,
+          ')'
+        );
+
+    /*
+      普通空格
+    */
+
+    s =
+      s.replace(
         /\s+/g,
         ''
-      )
+      );
 
-      .replace(
-        /[{}]/g,
+    /*
+      常见数学名称
+    */
+
+    s =
+      s
+        .replace(
+          /\\sin/g,
+          'sin'
+        )
+
+        .replace(
+          /\\cos/g,
+          'cos'
+        )
+
+        .replace(
+          /\\tan/g,
+          'tan'
+        )
+
+        .replace(
+          /\\ln/g,
+          'ln'
+        )
+
+        .replace(
+          /\\log/g,
+          'log'
+        )
+
+        .replace(
+          /\\exp/g,
+          'exp'
+        );
+
+    /*
+      结尾标点
+    */
+
+    s =
+      s.replace(
+        /[;,，。]+$/g,
         ''
-      )
+      );
 
-      .replace(
-        /＋/g,
-        '+'
-      )
+    return s;
+  }
 
-      .replace(
-        /−/g,
-        '-'
-      )
+  function unwrapNumericParentheses(
+    value
+  ) {
+    let s =
+      value;
 
-      .replace(
-        /×/g,
-        '*'
-      )
+    /*
+      (1)/(2)
+      ↓
+      1/2
+    */
 
-      .replace(
-        /\\frac/g,
-        'frac'
-      )
+    s =
+      s.replace(
+        /^\((-?\d+(?:\.\d+)?)\)\/\((-?\d+(?:\.\d+)?)\)$/,
+        '$1/$2'
+      );
 
-      .replace(
-        /\^\(?1\)?/g,
-        ''
-      )
+    /*
+      (0.5)
+      ↓
+      0.5
+    */
 
+    s =
+      s.replace(
+        /^\((-?\d+(?:\.\d+)?)\)$/,
+        '$1'
+      );
+
+    return s;
+  }
+
+  function parseSimpleNumericAnswer(
+    value = ''
+  ) {
+    let s =
+      normalizeAnswer(
+        value
+      );
+
+    s =
+      unwrapNumericParentheses(
+        s
+      );
+
+    if (
+      !s
+    ) {
+      return null;
+    }
+
+    /*
+      百分数
+    */
+
+    if (
+      /^-?\d+(?:\.\d+)?%$/
+        .test(s)
+    ) {
+      return (
+        Number(
+          s.slice(
+            0,
+            -1
+          )
+        ) /
+        100
+      );
+    }
+
+    /*
+      简单分数
+    */
+
+    const fractionMatch =
+      s.match(
+        /^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/
+      );
+
+    if (
+      fractionMatch
+    ) {
+      const numerator =
+        Number(
+          fractionMatch[1]
+        );
+
+      const denominator =
+        Number(
+          fractionMatch[2]
+        );
+
+      if (
+        denominator !== 0
+      ) {
+        return (
+          numerator /
+          denominator
+        );
+      }
+    }
+
+    /*
+      普通数字
+    */
+
+    if (
+      /^-?\d+(?:\.\d+)?$/
+        .test(s)
+    ) {
+      return Number(s);
+    }
+
+    return null;
+  }
+
+  function stripTrailingConstantC(
+    value
+  ) {
+    return value
       .replace(
         /\+c$/i,
-        '+c'
+        ''
+      )
+      .replace(
+        /c\+$/i,
+        ''
       );
+  }
+
+  function locallyEquivalent(
+    userAnswer,
+    standardAnswer
+  ) {
+    const a =
+      normalizeAnswer(
+        userAnswer
+      );
+
+    const b =
+      normalizeAnswer(
+        standardAnswer
+      );
+
+    if (
+      !a ||
+      !b
+    ) {
+      return false;
+    }
+
+    /*
+      1.
+      标准化之后完全一致。
+
+      例如：
+
+      2x/ (1+x^2)
+
+      与
+
+      2x/(1+x^2)
+    */
+
+    if (
+      a === b
+    ) {
+      return true;
+    }
+
+    /*
+      2.
+      数值等价。
+
+      例如：
+
+      1/2
+      二分之一
+      0.5
+      50%
+    */
+
+    const numA =
+      parseSimpleNumericAnswer(
+        a
+      );
+
+    const numB =
+      parseSimpleNumericAnswer(
+        b
+      );
+
+    if (
+      numA !== null &&
+      numB !== null
+    ) {
+      return (
+        Math.abs(
+          numA -
+          numB
+        ) <
+        1e-10
+      );
+    }
+
+    /*
+      3.
+      不定积分 +C
+
+      demo 中允许只差
+      积分常数写法。
+    */
+
+    const withoutCA =
+      stripTrailingConstantC(
+        a
+      );
+
+    const withoutCB =
+      stripTrailingConstantC(
+        b
+      );
+
+    if (
+      withoutCA ===
+      withoutCB
+    ) {
+      return true;
+    }
+
+    return false;
   }
 
   async function judgeAnswer(
@@ -852,56 +1579,82 @@
       };
     }
 
+    /*
+      第一层：
+
+      本地确定性判题。
+
+      能确认就直接判对，
+      不浪费 API。
+    */
+
+    if (
+      locallyEquivalent(
+        userAnswer,
+        question.answer
+      )
+    ) {
+      return {
+        correct: true,
+
+        feedback:
+          '答案与参考答案等价。'
+      };
+    }
+
+    /*
+      第二层：
+
+      DeepSeek 判断数学等价。
+
+      不再要求字符串完全一致。
+    */
+
     try {
-      if (
-        question.source ===
-        'ai'
-      ) {
-        const data =
-          await apiCall(
-            'judge',
-            {
-              question: {
-                module:
-                  question.module,
+      const data =
+        await apiCall(
+          'judge',
+          {
+            question: {
+              module:
+                question.module,
 
-                topic:
-                  question.topic,
+              topic:
+                question.topic,
 
-                prompt:
-                  question.prompt,
+              prompt:
+                question.prompt,
 
-                answer:
-                  question.answer,
+              answer:
+                question.answer,
 
-                solution:
-                  question.solution
-              },
+              solution:
+                question.solution
+            },
 
-              userAnswer
-            }
-          );
+            userAnswer
+          }
+        );
 
-        apiHealthy =
-          true;
+      apiHealthy =
+        true;
 
-        renderApiStatus();
+      renderApiStatus();
 
-        return {
-          correct:
-            Boolean(
-              data.correct
-            ),
+      return {
+        correct:
+          Boolean(
+            data.correct
+          ),
 
-          feedback:
-            data.feedback ||
-            ''
-        };
-      }
+        feedback:
+          data.feedback ||
+          ''
+      };
 
     } catch (error) {
       console.warn(
-        'AI 判题失败，使用本地宽松比较',
+        'AI 判题失败，本地规则无法继续确认。',
         error
       );
 
@@ -911,41 +1664,34 @@
       renderApiStatus();
     }
 
-    const a =
-      normalizeAnswer(
-        userAnswer
-      );
+    /*
+      第三层：
 
-    const b =
-      normalizeAnswer(
-        question.answer
-      );
+      本地无法确认，
+      AI 又没连上。
 
-    const correct =
-      a === b ||
-      (
-        b.includes(
-          '+c'
-        ) &&
-        a.replace(
-          '+c',
-          ''
-        ) ===
-        b.replace(
-          '+c',
-          ''
-        )
-      );
+      不能直接判错。
+
+      标记为：
+      needsManualCheck
+    */
 
     return {
-      correct,
+      correct: null,
+
+      needsManualCheck:
+        true,
 
       feedback:
-        correct
-          ? '答案与参考答案一致。'
-          : `本地判题未匹配。参考答案：${question.answer}`
+        `当前 AI 判题服务不可用，本地规则无法确认该表达式是否与参考答案数学等价。参考答案：${question.answer}`
     };
   }
+
+  /*
+  =========================================================
+  统计 / 错题调度
+  =========================================================
+  */
 
   function recordAttempt(
     question,
@@ -1066,16 +1812,14 @@
         question
       );
 
-    return state.reviews
-      .find(
-        r =>
-          r.key === key
-      );
+    return state.reviews.find(
+      r =>
+        r.key === key
+    );
   }
 
   function handleWrongReviewScheduling(
-    question,
-    isReviewMode = false
+    question
   ) {
     const key =
       topicKey(
@@ -1153,19 +1897,16 @@
     );
 
     /*
-      规则：
+      首次错：
+      2 天后。
 
-      首次错误：
-      2 天后复习。
-
-      再次错误：
-      5 天后复习。
+      再次错：
+      5 天后。
     */
 
     item.dueAt =
       addDaysISO(
-        item.wrongCount ===
-        1
+        item.wrongCount === 1
           ? 2
           : 5
       );
@@ -1202,16 +1943,6 @@
         null;
 
     } else {
-
-      /*
-        为完成
-        “连续答对 3 次”
-        的验证，
-
-        正确后仍安排
-        2 天后的短间隔复习。
-      */
-
       item.dueAt =
         addDaysISO(
           2
@@ -1223,14 +1954,12 @@
     const today =
       todayISO();
 
-    return state.reviews
-      .filter(
-        r =>
-          r.highFreq &&
-          r.dueAt &&
-          r.dueAt <=
-            today
-      );
+    return state.reviews.filter(
+      r =>
+        r.highFreq &&
+        r.dueAt &&
+        r.dueAt <= today
+    );
   }
 
   function computeStreak() {
@@ -1273,8 +2002,7 @@
       );
     }
 
-    let streak =
-      0;
+    let streak = 0;
 
     while (
       true
@@ -1303,9 +2031,7 @@
         `${y}-${m}-${d}`;
 
       if (
-        !set.has(
-          key
-        )
+        !set.has(key)
       ) {
         break;
       }
@@ -1323,16 +2049,20 @@
   }
 
   function todayDailyAttempts() {
-    return state.history
-      .filter(
-        h =>
-          h.date ===
-            todayISO() &&
-          h.mode ===
-            'daily'
-      )
-      .length;
+    return state.history.filter(
+      h =>
+        h.date ===
+          todayISO() &&
+        h.mode ===
+          'daily'
+    ).length;
   }
+
+  /*
+  =========================================================
+  页面导航
+  =========================================================
+  */
 
   function switchView(
     view
@@ -1359,13 +2089,14 @@
         btn =>
           btn.classList.toggle(
             'active',
-            btn.dataset.viewTarget ===
+
+            btn.dataset
+              .viewTarget ===
               view
           )
       );
 
     const meta = {
-
       dashboard: [
         'Overview',
         '今天也只做一点点。',
@@ -1395,7 +2126,6 @@
         '把连续性看得比单日强度更重要。',
         '这里记录的是你真正完成整组每日训练的日期。'
       ]
-
     }[view];
 
     $('pageEyebrow')
@@ -1456,6 +2186,12 @@
     }
   }
 
+  /*
+  =========================================================
+  Dashboard
+  =========================================================
+  */
+
   function renderDashboard() {
     $('todayDone')
       .textContent =
@@ -1499,8 +2235,7 @@
 
     $('dueReviewCount')
       .textContent =
-        dueReviews()
-          .length;
+        dueReviews().length;
 
     $('overallAccuracy')
       .textContent =
@@ -1529,7 +2264,6 @@
               config
             ]
           ) => {
-
             const s =
               state.stats
                 .byModule[
@@ -1543,24 +2277,25 @@
               );
 
             const width =
-              acc ??
-              0;
+              acc ?? 0;
 
             return `
               <div>
 
                 <div
-                  class="flex items-center
-                         justify-between text-sm">
+                  class="
+                    flex items-center
+                    justify-between
+                    text-sm
+                  "
+                >
 
-                  <div
-                    class="flex items-center
-                           gap-2">
+                  <div class="flex items-center gap-2">
 
                     <span
                       class="h-2 w-2 rounded-full"
-                      style="background:${config.color}">
-                    </span>
+                      style="background:${config.color}"
+                    ></span>
 
                     <span>
                       ${config.label}
@@ -1568,8 +2303,7 @@
 
                   </div>
 
-                  <span
-                    class="text-xs text-muted">
+                  <span class="text-xs text-muted">
 
                     ${
                       acc === null
@@ -1582,18 +2316,26 @@
                 </div>
 
                 <div
-                  class="mt-2.5 h-1.5
-                         overflow-hidden rounded-full
-                         bg-[#efede8]">
+                  class="
+                    mt-2.5
+                    h-1.5
+                    overflow-hidden
+                    rounded-full
+                    bg-[#efede8]
+                  "
+                >
 
                   <div
-                    class="h-full rounded-full
-                           transition-all"
+                    class="
+                      h-full
+                      rounded-full
+                      transition-all
+                    "
                     style="
                       width:${width}%;
                       background:${config.color};
-                    ">
-                  </div>
+                    "
+                  ></div>
 
                 </div>
 
@@ -1612,6 +2354,7 @@
             t.attempts >=
             1
         )
+
         .map(
           t => ({
             ...t,
@@ -1622,6 +2365,7 @@
               t.attempts
           })
         )
+
         .sort(
           (
             a,
@@ -1632,6 +2376,7 @@
             b.attempts -
               a.attempts
         )
+
         .slice(
           0,
           5
@@ -1648,51 +2393,55 @@
                 i
               ) => `
                 <div
-                  class="flex items-center gap-3
-                         rounded-xl border border-line
-                         px-3.5 py-3">
+                  class="
+                    flex items-center
+                    gap-3
+                    rounded-xl
+                    border border-line
+                    px-3.5 py-3
+                  "
+                >
 
                   <span
-                    class="grid h-7 w-7 shrink-0
-                           place-items-center rounded-full
-                           bg-[#f1f0ec]
-                           text-xs text-muted">
-
+                    class="
+                      grid h-7 w-7
+                      shrink-0
+                      place-items-center
+                      rounded-full
+                      bg-[#f1f0ec]
+                      text-xs
+                      text-muted
+                    "
+                  >
                     ${i + 1}
-
                   </span>
 
-                  <div
-                    class="min-w-0 flex-1">
+                  <div class="min-w-0 flex-1">
 
                     <div
-                      class="truncate text-sm font-medium">
-
+                      class="truncate text-sm font-medium"
+                    >
                       ${escapeHTML(
                         t.topic
                       )}
-
                     </div>
 
-                    <div
-                      class="mt-0.5 text-xs text-muted">
+                    <div class="mt-0.5 text-xs text-muted">
 
-                      ${
-                        moduleLabel(
-                          t.module
-                        )
-                      }
-                      ·
-                      错误率
+                      ${moduleLabel(
+                        t.module
+                      )}
+
+                      · 错误率
+
                       ${
                         Math.round(
                           t.errorRate *
                           100
                         )
                       }%
-                      ·
-                      ${t.attempts}
-                      次
+
+                      · ${t.attempts} 次
 
                     </div>
 
@@ -1709,11 +2458,10 @@
             );
 
     const history =
-      state.history
-        .slice(
-          0,
-          6
-        );
+      state.history.slice(
+        0,
+        6
+      );
 
     $('recentHistory')
       .innerHTML =
@@ -1723,23 +2471,30 @@
             .map(
               h => `
                 <div
-                  class="flex items-start gap-3">
+                  class="
+                    flex items-start
+                    gap-3
+                  "
+                >
 
                   <span
-                    class="mt-1.5 h-2 w-2
-                           shrink-0 rounded-full
-                           ${
-                             h.correct
-                               ? 'bg-emerald-500'
-                               : 'bg-clay'
-                           }">
-                  </span>
+                    class="
+                      mt-1.5
+                      h-2 w-2
+                      shrink-0
+                      rounded-full
 
-                  <div
-                    class="min-w-0 flex-1">
+                      ${
+                        h.correct
+                          ? 'bg-emerald-500'
+                          : 'bg-clay'
+                      }
+                    "
+                  ></span>
 
-                    <div
-                      class="truncate text-sm">
+                  <div class="min-w-0 flex-1">
+
+                    <div class="truncate text-sm">
 
                       ${
                         escapeHTML(
@@ -1753,7 +2508,8 @@
                     </div>
 
                     <div
-                      class="mt-0.5 text-xs text-muted">
+                      class="mt-0.5 text-xs text-muted"
+                    >
 
                       ${
                         h.correct
@@ -1761,13 +2517,9 @@
                           : '答错'
                       }
 
-                      ·
-
-                      ${
-                        modeLabel(
-                          h.mode
-                        )
-                      }
+                      · ${modeLabel(
+                        h.mode
+                      )}
 
                       ·
 
@@ -1808,8 +2560,7 @@
             );
 
     const due =
-      dueReviews()
-        .length;
+      dueReviews().length;
 
     if (
       !state.profile
@@ -1832,8 +2583,7 @@
           'diagnosis';
 
     } else if (
-      due >
-      0
+      due > 0
     ) {
       $('nextActionTitle')
         .textContent =
@@ -1890,17 +2640,20 @@
   ) {
     return `
       <div
-        class="rounded-xl border border-dashed
-               border-line bg-[#faf9f6]
-               px-4 py-5 text-center">
+        class="
+          rounded-xl
+          border border-dashed border-line
+          bg-[#faf9f6]
+          px-4 py-5
+          text-center
+        "
+      >
 
-        <div
-          class="text-sm font-medium">
+        <div class="text-sm font-medium">
           ${title}
         </div>
 
-        <div
-          class="mt-1 text-xs text-muted">
+        <div class="mt-1 text-xs text-muted">
           ${text}
         </div>
 
@@ -1928,8 +2681,7 @@
 
   function renderSidebarReviewBadge() {
     const count =
-      dueReviews()
-        .length;
+      dueReviews().length;
 
     const badge =
       $('sidebarReviewCount');
@@ -1937,12 +2689,17 @@
     badge.textContent =
       count;
 
-    badge.classList
-      .toggle(
-        'hidden',
-        count === 0
-      );
+    badge.classList.toggle(
+      'hidden',
+      count === 0
+    );
   }
+
+  /*
+  =========================================================
+  Diagnosis
+  =========================================================
+  */
 
   function renderDiagnosisIntro() {
     const summary =
@@ -1952,11 +2709,9 @@
       state.profile
         .diagnosed
     ) {
-      summary
-        .classList
-        .remove(
-          'hidden'
-        );
+      summary.classList.remove(
+        'hidden'
+      );
 
       summary.innerHTML = `
         <div class="font-medium">
@@ -1964,7 +2719,12 @@
         </div>
 
         <div
-          class="mt-2 grid gap-2 sm:grid-cols-3">
+          class="
+            mt-2
+            grid gap-2
+            sm:grid-cols-3
+          "
+        >
 
           ${
             Object.entries(
@@ -1979,15 +2739,24 @@
                   ]
                 ) => `
                   <div
-                    class="rounded-lg bg-white
-                           px-3 py-2 text-xs">
+                    class="
+                      rounded-lg
+                      bg-white
+                      px-3 py-2
+                      text-xs
+                    "
+                  >
 
                     <span class="text-muted">
                       ${moduleLabel(m)}
                     </span>
 
                     <span
-                      class="float-right font-medium">
+                      class="
+                        float-right
+                        font-medium
+                      "
+                    >
                       Lv.${level}
                     </span>
 
@@ -2005,11 +2774,9 @@
           '重新诊断';
 
     } else {
-      summary
-        .classList
-        .add(
-          'hidden'
-        );
+      summary.classList.add(
+        'hidden'
+      );
 
       $('startDiagnosisBtn')
         .textContent =
@@ -2184,33 +2951,24 @@
           a,
           b
         ) => {
-
           const sa =
             state.stats
-              .byModule[
-                a
-              ];
+              .byModule[a];
 
           const sb =
             state.stats
-              .byModule[
-                b
-              ];
+              .byModule[b];
 
           const aa =
             sa.attempts
-              ? (
-                sa.correct /
+              ? sa.correct /
                 sa.attempts
-              )
               : 0.5;
 
           const ab =
             sb.attempts
-              ? (
-                sb.correct /
+              ? sb.correct /
                 sb.attempts
-              )
               : 0.5;
 
           return (
@@ -2265,12 +3023,12 @@
       )
         .filter(
           t =>
-            t.attempts >
-              0 &&
+            t.attempts > 0 &&
             t.correct /
-              t.attempts <
-              0.75
+            t.attempts <
+            0.75
         )
+
         .sort(
           (
             a,
@@ -2285,10 +3043,12 @@
               b.attempts
             )
         )
+
         .slice(
           0,
           5
         )
+
         .map(
           t =>
             t.topic
@@ -2347,20 +3107,24 @@
     );
   }
 
+  /*
+  =========================================================
+  Review
+  =========================================================
+  */
+
   function renderReviewQueue() {
     const due =
       dueReviews();
 
     $('startReviewBtn')
       .disabled =
-        due.length ===
-        0;
+        due.length === 0;
 
     $('startReviewBtn')
       .classList.toggle(
         'opacity-40',
-        due.length ===
-          0
+        due.length === 0
       );
 
     $('startReviewBtn')
@@ -2402,6 +3166,7 @@
           r =>
             r.highFreq
         )
+
         .sort(
           (
             a,
@@ -2426,7 +3191,6 @@
           ? sorted
             .map(
               r => {
-
                 const isDue =
                   r.dueAt &&
                   r.dueAt <=
@@ -2435,41 +3199,47 @@
                 return `
                   <article
                     class="
-                      rounded-2xl border
+                      rounded-2xl
+                      border
+
                       ${
                         isDue
                           ? 'border-[#dfb09f] bg-[#fffaf7]'
                           : 'border-line bg-white'
                       }
-                      p-4 shadow-soft
-                    ">
+
+                      p-4
+                      shadow-soft
+                    "
+                  >
 
                     <div
-                      class="flex items-start
-                             justify-between gap-3">
+                      class="
+                        flex
+                        items-start
+                        justify-between
+                        gap-3
+                      "
+                    >
 
                       <div>
 
-                        <div
-                          class="text-xs text-muted">
-
-                          ${
-                            moduleLabel(
-                              r.module
-                            )
-                          }
-
+                        <div class="text-xs text-muted">
+                          ${moduleLabel(
+                            r.module
+                          )}
                         </div>
 
                         <div
-                          class="mt-1 text-sm font-semibold">
-
-                          ${
-                            escapeHTML(
-                              r.topic
-                            )
-                          }
-
+                          class="
+                            mt-1
+                            text-sm
+                            font-semibold
+                          "
+                        >
+                          ${escapeHTML(
+                            r.topic
+                          )}
                         </div>
 
                       </div>
@@ -2479,12 +3249,14 @@
                           rounded-full
                           px-2.5 py-1
                           text-[11px]
+
                           ${
                             isDue
                               ? 'bg-claySoft text-clay'
                               : 'bg-[#f1f0ec] text-muted'
                           }
-                        ">
+                        "
+                      >
 
                         ${
                           isDue
@@ -2497,32 +3269,46 @@
                     </div>
 
                     <div
-                      class="mt-4 grid grid-cols-2
-                             gap-2 text-xs text-muted">
+                      class="
+                        mt-4
+                        grid grid-cols-2
+                        gap-2
+                        text-xs
+                        text-muted
+                      "
+                    >
 
                       <div
-                        class="rounded-lg
-                               bg-[#f7f6f2]
-                               p-2.5">
+                        class="
+                          rounded-lg
+                          bg-[#f7f6f2]
+                          p-2.5
+                        "
+                      >
 
                         累计做错
 
                         <strong
-                          class="float-right text-ink">
+                          class="float-right text-ink"
+                        >
                           ${r.wrongCount}
                         </strong>
 
                       </div>
 
                       <div
-                        class="rounded-lg
-                               bg-[#f7f6f2]
-                               p-2.5">
+                        class="
+                          rounded-lg
+                          bg-[#f7f6f2]
+                          p-2.5
+                        "
+                      >
 
                         连续答对
 
                         <strong
-                          class="float-right text-ink">
+                          class="float-right text-ink"
+                        >
                           ${r.correctStreak}/3
                         </strong>
 
@@ -2560,8 +3346,7 @@
       '生成变式题…'
     );
 
-    const questions =
-      [];
+    const questions = [];
 
     for (
       const review
@@ -2603,9 +3388,7 @@
       q.reviewKey =
         review.key;
 
-      questions.push(
-        q
-      );
+      questions.push(q);
     }
 
     setButtonLoading(
@@ -2631,6 +3414,12 @@
       'reviewSession'
     );
   }
+
+  /*
+  =========================================================
+  题目 Session
+  =========================================================
+  */
 
   function renderActiveSession(
     containerId
@@ -2668,10 +3457,8 @@
 
     const progress =
       Math.round(
-        (
-          session.index /
-          session.questions.length
-        ) *
+        session.index /
+        session.questions.length *
         100
       );
 
@@ -2688,23 +3475,40 @@
 
     container.innerHTML = `
       <div
-        class="mx-auto max-w-3xl question-enter">
+        class="
+          mx-auto
+          max-w-3xl
+          question-enter
+        "
+      >
 
         <div
-          class="mb-4 flex items-center
-                 justify-between gap-3
-                 text-xs text-muted">
+          class="
+            mb-4
+            flex items-center
+            justify-between
+            gap-3
+            text-xs
+            text-muted
+          "
+        >
 
           <span>
-            ${modeLabel(session.mode)}
+            ${modeLabel(
+              session.mode
+            )}
             ·
             ${session.index + 1}/${session.questions.length}
           </span>
 
           <span>
-            ${moduleLabel(q.module)}
+            ${moduleLabel(
+              q.module
+            )}
             ·
-            ${escapeHTML(q.topic)}
+            ${escapeHTML(
+              q.topic
+            )}
             ·
             Lv.${q.difficulty}
           </span>
@@ -2712,31 +3516,53 @@
         </div>
 
         <div
-          class="h-1 overflow-hidden
-                 rounded-full bg-[#e9e6e0]">
+          class="
+            h-1
+            overflow-hidden
+            rounded-full
+            bg-[#e9e6e0]
+          "
+        >
 
           <div
-            class="h-full rounded-full
-                   bg-clay transition-all"
-            style="width:${progress}%">
-          </div>
+            class="
+              h-full
+              rounded-full
+              bg-clay
+              transition-all
+            "
+            style="width:${progress}%"
+          ></div>
 
         </div>
 
         <article
-          class="mt-5 rounded-2xl
-                 border border-line
-                 bg-white p-6 shadow-soft
-                 sm:p-8">
+          class="
+            mt-5
+            rounded-2xl
+            border border-line
+            bg-white
+            p-6
+            shadow-soft
+            sm:p-8
+          "
+        >
 
           ${
             review
               ? `
                 <div
-                  class="mb-5 inline-flex
-                         rounded-full bg-claySoft
-                         px-3 py-1
-                         text-xs font-medium text-clay">
+                  class="
+                    mb-5
+                    inline-flex
+                    rounded-full
+                    bg-claySoft
+                    px-3 py-1
+                    text-xs
+                    font-medium
+                    text-clay
+                  "
+                >
 
                   变式复习
                   ·
@@ -2749,71 +3575,97 @@
           }
 
           <div
-            class="text-xs font-medium uppercase
-                   tracking-[.12em] text-muted">
+            class="
+              text-xs
+              font-medium
+              uppercase
+              tracking-[.12em]
+              text-muted
+            "
+          >
             Question
           </div>
 
           <div
-            class="mt-4 text-lg leading-9
-                   sm:text-xl">
-
+            class="
+              mt-4
+              text-lg
+              leading-9
+              sm:text-xl
+            "
+          >
             ${q.prompt}
-
           </div>
 
           <label
-            class="mt-8 block
-                   text-xs font-medium text-muted"
-            for="answerInput">
-
+            class="
+              mt-8
+              block
+              text-xs
+              font-medium
+              text-muted
+            "
+            for="answerInput"
+          >
             你的答案
-
           </label>
 
           <textarea
             id="answerInput"
             rows="2"
-            placeholder="可输入普通数学表达式，例如 1/2、2x/(1+x^2)、x^2+C"
-            class="mt-2 w-full resize-none
-                   rounded-xl border border-line
-                   bg-[#fbfaf7]
-                   px-4 py-3.5 text-base
-                   transition
-                   focus:border-[#b7afa5]
-                   focus:bg-white">
-          </textarea>
+            placeholder="例如：1/2、二分之一、0.5、2x/(1+x^2)"
+            class="
+              mt-2
+              w-full
+              resize-none
+              rounded-xl
+              border border-line
+              bg-[#fbfaf7]
+              px-4 py-3.5
+              text-base
+              transition
+              focus:border-[#b7afa5]
+              focus:bg-white
+            "
+          ></textarea>
 
           <div
-            class="mt-4 flex flex-wrap
-                   items-center justify-between
-                   gap-3">
+            class="
+              mt-4
+              flex flex-wrap
+              items-center
+              justify-between
+              gap-3
+            "
+          >
 
             <div
-              class="text-[11px] text-muted">
-
-              AI 判题仅作辅助，
-              必要时以教材/标准答案为准。
-
+              class="text-[11px] text-muted"
+            >
+              支持常见等价表达；AI 判题仅作辅助，必要时以教材/标准答案为准。
             </div>
 
             <button
               id="submitAnswerBtn"
-              class="rounded-xl bg-ink
-                     px-5 py-2.5
-                     text-sm font-medium text-white
-                     hover:opacity-90">
-
+              class="
+                rounded-xl
+                bg-ink
+                px-5 py-2.5
+                text-sm
+                font-medium
+                text-white
+                hover:opacity-90
+              "
+            >
               提交答案
-
             </button>
 
           </div>
 
           <div
             id="answerFeedback"
-            class="mt-6 hidden">
-          </div>
+            class="mt-6 hidden"
+          ></div>
 
         </article>
 
@@ -2833,7 +3685,6 @@
       .addEventListener(
         'keydown',
         event => {
-
           if (
             (
               event.ctrlKey ||
@@ -2913,38 +3764,53 @@
       false
     );
 
-    recordAttempt(
-      q,
-      verdict.correct,
-      session.mode,
-      userAnswer
-    );
+    /*
+      只有明确判断为：
+
+      true
+      或
+      false
+
+      才写入正确率统计。
+
+      manual check
+      不算错题。
+    */
 
     if (
-      session.mode ===
-      'review'
+      !verdict.needsManualCheck
     ) {
+      recordAttempt(
+        q,
+        verdict.correct,
+        session.mode,
+        userAnswer
+      );
+
       if (
-        verdict.correct
+        session.mode ===
+        'review'
       ) {
-        handleCorrectReviewScheduling(
+        if (
+          verdict.correct
+        ) {
+          handleCorrectReviewScheduling(
+            q
+          );
+
+        } else {
+          handleWrongReviewScheduling(
+            q
+          );
+        }
+
+      } else if (
+        !verdict.correct
+      ) {
+        handleWrongReviewScheduling(
           q
         );
-
-      } else {
-        handleWrongReviewScheduling(
-          q,
-          true
-        );
       }
-
-    } else if (
-      !verdict.correct
-    ) {
-      handleWrongReviewScheduling(
-        q,
-        false
-      );
     }
 
     session.results.push({
@@ -2952,7 +3818,14 @@
         q.id,
 
       correct:
-        verdict.correct,
+        verdict.needsManualCheck
+          ? null
+          : verdict.correct,
+
+      needsManualCheck:
+        Boolean(
+          verdict.needsManualCheck
+        ),
 
       userAnswer,
 
@@ -2966,60 +3839,109 @@
     const feedback =
       $('answerFeedback');
 
-    feedback.classList
-      .remove(
-        'hidden'
-      );
+    feedback.classList.remove(
+      'hidden'
+    );
+
+    const statusType =
+      verdict.needsManualCheck
+
+        ? 'manual'
+
+        : verdict.correct
+          ? 'correct'
+          : 'wrong';
+
+    const statusTitle = {
+      correct:
+        '答对了',
+
+      wrong:
+        '这题需要再看一下',
+
+      manual:
+        '暂时无法自动确认'
+    }[statusType];
+
+    const statusSymbol = {
+      correct:
+        '✓',
+
+      wrong:
+        '×',
+
+      manual:
+        '?'
+    }[statusType];
+
+    const boxClass = {
+      correct:
+        'border-[#cddccf] bg-[#f6faf6]',
+
+      wrong:
+        'border-[#e7c4b7] bg-[#fff9f6]',
+
+      manual:
+        'border-[#ddd8cf] bg-[#faf9f6]'
+    }[statusType];
+
+    const titleClass = {
+      correct:
+        'text-sage',
+
+      wrong:
+        'text-clay',
+
+      manual:
+        'text-[#6f6a63]'
+    }[statusType];
 
     feedback.innerHTML = `
       <div
         class="
-          rounded-xl border p-4
-          ${
-            verdict.correct
-              ? 'border-[#cddccf] bg-[#f6faf6]'
-              : 'border-[#e7c4b7] bg-[#fff9f6]'
-          }
-        ">
+          rounded-xl
+          border
+          p-4
+          ${boxClass}
+        "
+      >
 
         <div
           class="
-            flex items-center gap-2
-            text-sm font-semibold
-            ${
-              verdict.correct
-                ? 'text-sage'
-                : 'text-clay'
-            }
-          ">
+            flex items-center
+            gap-2
+            text-sm
+            font-semibold
+            ${titleClass}
+          "
+        >
 
           <span>
-            ${
-              verdict.correct
-                ? '✓'
-                : '×'
-            }
+            ${statusSymbol}
           </span>
 
           <span>
-            ${
-              verdict.correct
-                ? '答对了'
-                : '这题需要再看一下'
-            }
+            ${statusTitle}
           </span>
 
         </div>
 
         <div
-          class="mt-3 text-sm
-                 leading-7 text-ink">
+          class="
+            mt-3
+            text-sm
+            leading-7
+            text-ink
+          "
+        >
 
           <span class="text-muted">
             参考答案：
           </span>
 
-          ${escapeHTML(q.answer)}
+          ${escapeHTML(
+            q.answer
+          )}
 
         </div>
 
@@ -3027,55 +3949,99 @@
           verdict.feedback
             ? `
               <div
-                class="mt-2 text-sm
-                       leading-6 text-muted">
-
-                ${
-                  escapeHTML(
-                    verdict.feedback
-                  )
-                }
-
+                class="
+                  mt-2
+                  text-sm
+                  leading-6
+                  text-muted
+                "
+              >
+                ${escapeHTML(
+                  verdict.feedback
+                )}
               </div>
             `
             : ''
         }
 
+        ${
+          verdict.needsManualCheck
+
+            ? `
+              <div
+                class="
+                  mt-3
+                  rounded-lg
+                  bg-white
+                  px-3 py-2.5
+                  text-xs
+                  leading-5
+                  text-muted
+                "
+              >
+                这道题不会计入正确率，也不会进入错题队列。
+              </div>
+            `
+
+            : ''
+        }
+
         <details
-          class="mt-4 rounded-lg border
-                 border-line bg-white
-                 px-3.5 py-3">
+          class="
+            mt-4
+            rounded-lg
+            border border-line
+            bg-white
+            px-3.5 py-3
+          "
+        >
 
           <summary
-            class="cursor-pointer
-                   text-sm font-medium">
-
+            class="
+              cursor-pointer
+              text-sm
+              font-medium
+            "
+          >
             查看解析
-
           </summary>
 
           <div
-            class="mt-3 text-sm
-                   leading-7 text-muted">
-
+            class="
+              mt-3
+              text-sm
+              leading-7
+              text-muted
+            "
+          >
             ${
               q.solution ||
               '暂无解析。'
             }
-
           </div>
 
         </details>
 
         <div
-          class="mt-4 flex justify-end">
+          class="
+            mt-4
+            flex
+            justify-end
+          "
+        >
 
           <button
             id="nextQuestionBtn"
-            class="rounded-xl bg-ink
-                   px-4 py-2.5
-                   text-sm font-medium text-white
-                   hover:opacity-90">
+            class="
+              rounded-xl
+              bg-ink
+              px-4 py-2.5
+              text-sm
+              font-medium
+              text-white
+              hover:opacity-90
+            "
+          >
 
             ${
               session.index + 1 >=
@@ -3101,7 +4067,6 @@
       .addEventListener(
         'click',
         () => {
-
           session.index +=
             1;
 
@@ -3143,78 +4108,102 @@
       session.mode ===
       'diagnosis'
     ) {
-      const byModule =
-        {};
+      const byModule = {};
 
-      session.questions
-        .forEach(
-          (
-            q,
-            idx
-          ) => {
+      session.questions.forEach(
+        (
+          q,
+          idx
+        ) => {
+          const result =
+            session.results[
+              idx
+            ];
 
-            const result =
-              session.results[
-                idx
-              ];
+          /*
+            manual check
+            不参与诊断分数。
+          */
 
-            if (
-              !byModule[
-                q.module
-              ]
-            ) {
-              byModule[
-                q.module
-              ] = {
-                total: 0,
-                correct: 0
-              };
-            }
+          if (
+            typeof result
+              ?.correct !==
+            'boolean'
+          ) {
+            return;
+          }
 
+          if (
+            !byModule[
+              q.module
+            ]
+          ) {
             byModule[
               q.module
-            ].total +=
-              1;
+            ] = {
+              total:
+                0,
 
-            if (
-              result?.correct
-            ) {
-              byModule[
-                q.module
-              ].correct +=
-                1;
-            }
+              correct:
+                0
+            };
           }
-        );
+
+          byModule[
+            q.module
+          ].total +=
+            1;
+
+          if (
+            result.correct
+          ) {
+            byModule[
+              q.module
+            ].correct +=
+              1;
+          }
+        }
+      );
 
       Object.keys(
         MODULES
       )
         .forEach(
           m => {
-
             const s =
-              byModule[m] || {
-                total: 0,
-                correct: 0
-              };
+              byModule[m];
+
+            /*
+              如果该模块
+              没有任何可确认答案，
+              保留原难度。
+            */
+
+            if (
+              !s ||
+              !s.total
+            ) {
+              return;
+            }
 
             const ratio =
-              s.total
-                ? (
-                  s.correct /
-                  s.total
-                )
-                : 0;
+              s.correct /
+              s.total;
 
             state.profile
               .levelByModule[
                 m
               ] =
-                ratio >= 0.8
+                ratio >=
+                0.8
+
                   ? 3
-                  : ratio >= 0.5
+
+                  : ratio >=
+                    0.5
+
                     ? 2
+
                     : 1;
           }
         );
@@ -3257,31 +4246,44 @@
     container,
     session
   ) {
+    const judged =
+      session.results.filter(
+        r =>
+          typeof r.correct ===
+          'boolean'
+      );
+
     const correctCount =
-      session.results
-        .filter(
-          r =>
-            r.correct
-        )
-        .length;
+      judged.filter(
+        r =>
+          r.correct
+      ).length;
+
+    const judgedCount =
+      judged.length;
+
+    const manualCount =
+      session.results.filter(
+        r =>
+          r.needsManualCheck
+      ).length;
 
     const total =
       session.questions.length;
 
     const rate =
-      total
+      judgedCount
         ? Math.round(
             correctCount /
-            total *
+            judgedCount *
             100
           )
-        : 0;
+        : null;
 
     const mode =
       session.mode;
 
-    let extra =
-      '';
+    let extra = '';
 
     if (
       mode ===
@@ -3289,8 +4291,12 @@
     ) {
       extra = `
         <div
-          class="mt-5 grid gap-2
-                 sm:grid-cols-3">
+          class="
+            mt-5
+            grid gap-2
+            sm:grid-cols-3
+          "
+        >
 
           ${
             Object.entries(
@@ -3305,17 +4311,24 @@
                   ]
                 ) => `
                   <div
-                    class="rounded-xl
-                           bg-[#f7f6f2]
-                           p-3 text-sm">
+                    class="
+                      rounded-xl
+                      bg-[#f7f6f2]
+                      p-3
+                      text-sm
+                    "
+                  >
 
                     <span class="text-muted">
                       ${moduleLabel(m)}
                     </span>
 
                     <span
-                      class="float-right
-                             font-semibold">
+                      class="
+                        float-right
+                        font-semibold
+                      "
+                    >
                       Lv.${l}
                     </span>
 
@@ -3334,120 +4347,200 @@
     ) {
       extra = `
         <div
-          class="mt-5 rounded-xl
-                 bg-sageSoft
-                 px-4 py-3
-                 text-sm text-sage">
-
+          class="
+            mt-5
+            rounded-xl
+            bg-sageSoft
+            px-4 py-3
+            text-sm
+            text-sage
+          "
+        >
           ✓ 今日打卡已记录。
           连续 ${computeStreak()} 天。
-
         </div>
       `;
 
     } else {
       const remaining =
-        state.reviews
-          .filter(
-            r =>
-              r.highFreq
-          )
-          .length;
+        state.reviews.filter(
+          r =>
+            r.highFreq
+        ).length;
 
       extra = `
         <div
-          class="mt-5 rounded-xl
-                 bg-[#f7f6f2]
-                 px-4 py-3
-                 text-sm text-muted">
-
+          class="
+            mt-5
+            rounded-xl
+            bg-[#f7f6f2]
+            px-4 py-3
+            text-sm
+            text-muted
+          "
+        >
           当前仍有
           ${remaining}
           个考点处于高频复习队列。
-
         </div>
       `;
     }
 
+    const scoreText =
+      judgedCount
+
+        ? (
+          `${correctCount}/${judgedCount} 已判定题目正确 · 正确率 ${rate}%`
+        )
+
+        : (
+          '本组暂无可自动确认的判题结果'
+        );
+
     container.innerHTML = `
       <div
-        class="mx-auto max-w-2xl
-               rounded-2xl border border-line
-               bg-white p-7 text-center
-               shadow-soft sm:p-9">
+        class="
+          mx-auto
+          max-w-2xl
+          rounded-2xl
+          border border-line
+          bg-white
+          p-7
+          text-center
+          shadow-soft
+          sm:p-9
+        "
+      >
 
         <div
           class="
-            mx-auto grid h-12 w-12
-            place-items-center rounded-full
+            mx-auto
+            grid h-12 w-12
+            place-items-center
+            rounded-full
+
             ${
-              rate >= 70
-                ? 'bg-sageSoft text-sage'
-                : 'bg-claySoft text-clay'
+              rate === null
+                ? 'bg-[#efede8] text-muted'
+                : rate >= 70
+                  ? 'bg-sageSoft text-sage'
+                  : 'bg-claySoft text-clay'
             }
+
             text-xl
-          ">
+          "
+        >
 
           ${
-            rate >= 70
-              ? '✓'
-              : '↗'
+            rate === null
+              ? '?'
+              : rate >= 70
+                ? '✓'
+                : '↗'
           }
 
         </div>
 
         <h2
-          class="mt-5 text-2xl
-                 font-semibold tracking-tight">
-
+          class="
+            mt-5
+            text-2xl
+            font-semibold
+            tracking-tight
+          "
+        >
           这一组完成了。
-
         </h2>
 
         <p
-          class="mt-2 text-sm text-muted">
-
-          ${correctCount}/${total}
-          正确 ·
-          正确率 ${rate}%
-
+          class="
+            mt-2
+            text-sm
+            text-muted
+          "
+        >
+          ${scoreText}
         </p>
+
+        ${
+          manualCount
+            ? `
+              <p
+                class="
+                  mt-2
+                  text-xs
+                  text-muted
+                "
+              >
+                另有 ${manualCount} 道题暂未自动判定，
+                已从正确率统计中排除。
+              </p>
+            `
+            : ''
+        }
 
         ${extra}
 
         <div
-          class="mt-7 flex flex-wrap
-                 justify-center gap-2">
+          class="
+            mt-7
+            flex flex-wrap
+            justify-center
+            gap-2
+          "
+        >
 
           <button
-            class="rounded-xl border border-line
-                   bg-white px-4 py-2.5
-                   text-sm font-medium
-                   hover:bg-[#faf9f6]"
-            data-complete-target="dashboard">
-
+            class="
+              rounded-xl
+              border border-line
+              bg-white
+              px-4 py-2.5
+              text-sm
+              font-medium
+              hover:bg-[#faf9f6]
+            "
+            data-complete-target="dashboard"
+          >
             回到仪表盘
-
           </button>
 
           <button
-            class="rounded-xl bg-ink
-                   px-4 py-2.5
-                   text-sm font-medium text-white
-                   hover:opacity-90"
+            class="
+              rounded-xl
+              bg-ink
+              px-4 py-2.5
+              text-sm
+              font-medium
+              text-white
+              hover:opacity-90
+            "
             data-complete-target="${
-              mode === 'diagnosis'
+              mode ===
+              'diagnosis'
+
                 ? 'daily'
-                : mode === 'daily'
+
+                : mode ===
+                  'daily'
+
                   ? 'review'
+
                   : 'dashboard'
-            }">
+            }"
+          >
 
             ${
-              mode === 'diagnosis'
+              mode ===
+              'diagnosis'
+
                 ? '开始今日刷题'
-                : mode === 'daily'
+
+                : mode ===
+                  'daily'
+
                   ? '查看错题复习'
+
                   : '完成'
             }
 
@@ -3467,7 +4560,6 @@
           btn.addEventListener(
             'click',
             () => {
-
               state.activeSession =
                 null;
 
@@ -3524,6 +4616,12 @@
     renderDashboard();
   }
 
+  /*
+  =========================================================
+  Check-in
+  =========================================================
+  */
+
   function renderCheckin() {
     $('checkinStreak')
       .textContent =
@@ -3532,8 +4630,10 @@
     const dates =
       Array.from(
         {
-          length: 28
+          length:
+            28
         },
+
         (
           _,
           i
@@ -3563,7 +4663,6 @@
         dates
           .map(
             d => {
-
               const hit =
                 set.has(d);
 
@@ -3576,26 +4675,34 @@
                 <div
                   title="${d}"
                   class="
-                    aspect-square rounded-lg border
+                    aspect-square
+                    rounded-lg
+                    border
+
                     ${
                       hit
                         ? 'border-sage/20 bg-sage text-white'
                         : 'border-line bg-[#faf9f6] text-muted'
                     }
-                    grid place-items-center
+
+                    grid
+                    place-items-center
                     text-[11px]
-                  ">
-
-                  ${
-                    date.getDate()
-                  }
-
+                  "
+                >
+                  ${date.getDate()}
                 </div>
               `;
             }
           )
           .join('');
   }
+
+  /*
+  =========================================================
+  Button helper
+  =========================================================
+  */
 
   function setButtonLoading(
     button,
@@ -3640,11 +4747,16 @@
     }
   }
 
+  /*
+  =========================================================
+  Events
+  =========================================================
+  */
+
   function bindEvents() {
     document.addEventListener(
       'click',
       event => {
-
         const target =
           event.target.closest(
             '[data-view-target]'
@@ -3704,7 +4816,6 @@
       ?.addEventListener(
         'click',
         () => {
-
           if (
             !confirm(
               '确定清空本浏览器中的全部刷题记录吗？这个操作无法撤销。'
@@ -3732,6 +4843,12 @@
         }
       );
   }
+
+  /*
+  =========================================================
+  Init
+  =========================================================
+  */
 
   function init() {
     $('todayLabel')
