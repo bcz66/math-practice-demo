@@ -319,7 +319,7 @@ calcDaily.v2
 calcDaily.v1
 ```
 
-当前还没有账号系统，清除浏览器站点数据仍可能丢失学习记录。
+v4 起加入 Supabase 邮箱账号与云端同步。游客仍使用 LocalStorage；登录后 LocalStorage 作为本地缓存，Supabase 作为跨设备同步层。
 
 ## 部署
 
@@ -353,7 +353,7 @@ DEEPSEEK_API_KEY=你的 DeepSeek API Key
 - L1–L12 仍是 provisional scale，不应宣传为已经经过真实考研 / 竞赛题库校准。
 - AI 出题、难度评估和判题仍可能出错。
 - 当前仍仅覆盖高数中的极限、导数、积分训练。
-- 当前仍使用 LocalStorage，没有账号和云端同步。
+- 游客模式仍只使用 LocalStorage；登录用户会同步至 Supabase。
 
 
 ## v3.1 修复
@@ -384,3 +384,108 @@ DEEPSEEK_API_KEY=你的 DeepSeek API Key
 - 最近一次请求失败时会显示简短原因，例如余额不足、API Key 无效、请求过于频繁、服务繁忙或超时。
 - DeepSeek 上游 HTTP 状态码会由 Serverless Function 原样传给前端，便于定位 401 / 402 / 429 / 503 等问题。
 - 其他页面、预取机制、自适应难度算法、错题复习和 Anchor 校准接口均未修改。
+
+
+## v4.0 个人账号与云端学习记录
+
+本版在不改动 DeepSeek 出题/判题和自适应算法的前提下加入：
+
+- Supabase Auth 邮箱 + 密码注册 / 登录 / 退出。
+- 游客模式继续可用，不强制注册。
+- 首次登录自动合并当前浏览器 LocalStorage 与云端学习状态。
+- 登录后后台同步：
+  - 用户设置
+  - 极限 / 导数 / 积分 Ability、Level、Confidence
+  - Topic mastery
+  - 每一道作答 attempts
+  - 错题复习队列
+  - 打卡日期
+  - 完整 learner-state snapshot
+- 当前 activeSession 继续只保存在本机，不强制跨设备续做。
+- LocalStorage 保留为本地缓存，云端异常不会阻止本机刷题。
+- 所有云端学习表均启用 Row Level Security；登录用户只能访问自己的 `user_id`。
+
+### 新增文件
+
+```text
+supabase-client.js
+storage.js
+auth.js
+supabase-schema.sql
+```
+
+`api/deepseek.js` 无需修改。
+
+### Supabase 配置
+
+1. 在 Supabase 创建项目。
+2. 打开 SQL Editor，完整执行 `supabase-schema.sql`。
+3. 打开 Project Settings / API，复制：
+   - Project URL
+   - Publishable Key（旧项目也可能显示 Anon Key）
+4. 编辑 `supabase-client.js`：
+
+```js
+const SUPABASE_URL = 'https://xxxx.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = '你的 publishable/anon key';
+```
+
+浏览器端只能放 Publishable / Anon Key。
+
+**不要**把 `service_role` key 放进 GitHub、HTML 或浏览器 JS。
+
+### Email Auth
+
+Supabase Dashboard → Authentication → Providers → Email：
+
+- 开启 Email provider。
+- 开发阶段如果不想每次点邮件确认，可以按项目需要调整 Confirm email。
+- 如果开启邮箱确认，注册后用户需要先完成邮件验证再登录。
+
+### 数据同步策略
+
+```text
+游客
+  ↓
+LocalStorage
+
+登录
+  ↓
+本地状态 + 云端状态合并
+  ↓
+LocalStorage 立即写入
+  ↓
+约 0.9 秒 debounce
+  ↓
+Supabase 后台同步
+```
+
+这样刷题 UI 不等待数据库写入。
+
+### 数据表
+
+```text
+profiles
+user_state
+user_settings
+module_progress
+topic_progress
+attempts
+review_queue
+checkins
+```
+
+其中 `user_state` 是恢复应用状态的快照；其余表保留结构化学习数据，方便后续做学习报告、算法校准和产品分析。
+
+### 推荐测试顺序
+
+1. 不配置 Supabase 时打开应用，确认仍可游客刷题。
+2. 配置 Supabase 并执行 SQL。
+3. 注册一个测试账号。
+4. 登录前游客模式先做 2–3 题。
+5. 登录，确认页面提示“云端已同步”。
+6. 刷新页面，确认账号保持登录。
+7. 做一道题后等待约 1 秒，在 Supabase Table Editor 检查 `attempts` / `user_state`。
+8. 换另一个浏览器登录同一账号，确认 Ability、历史、错题和打卡恢复。
+9. 退出账号，确认本机仍能以游客方式继续使用。
+10. 测试“重置学习数据”：登录状态下会同时清空该账号的本机与云端学习数据。

@@ -400,6 +400,57 @@
               "></span>
             </div>
           </div>
+          <div id="accountStatusCard" class="
+            mt-3
+            rounded-2xl
+            border
+            border-line
+            bg-white/70
+            p-3.5
+          ">
+            <div class="
+              flex
+              items-start
+              justify-between
+              gap-3
+            ">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span id="accountStatusDot" class="
+                    h-2
+                    w-2
+                    shrink-0
+                    rounded-full
+                    bg-[#c9c3ba]
+                  "></span>
+                  <div id="accountStatusTitle" class="
+                    truncate
+                    text-xs
+                    font-medium
+                  ">游客模式</div>
+                </div>
+                <div id="accountStatusText" class="
+                  mt-1
+                  text-[11px]
+                  leading-4
+                  text-muted
+                ">登录后可跨设备同步学习记录</div>
+              </div>
+              <button id="accountActionBtn" class="
+                shrink-0
+                rounded-lg
+                border
+                border-line
+                bg-white
+                px-2.5
+                py-1.5
+                text-[11px]
+                font-medium
+                hover:bg-[#faf9f6]
+              ">登录</button>
+            </div>
+          </div>
+
           <button id="resetDataBtn" class="
             mt-3
             w-full
@@ -478,6 +529,19 @@
               text-muted
               shadow-sm
             "><span id="todayLabel">—</span></div>
+            <button id="mobileAccountBtn" class="
+              rounded-full
+              border
+              border-line
+              bg-white
+              px-3
+              py-1.5
+              text-xs
+              font-medium
+              text-muted
+              shadow-sm
+              lg:hidden
+            ">账号</button>
           </div>
         </header>
 
@@ -1524,10 +1588,203 @@
           leading-5
           text-muted
         ">
-          学生作品集 demo · AI 判题、AI 出题与临时难度估计可能出错，不作为备考依据 · 当前学习数据仅保存在本浏览器 LocalStorage
+          学生作品集 demo · AI 判题、AI 出题与临时难度估计可能出错，不作为备考依据 · 游客数据保存在本浏览器，登录后可同步至个人云端账号
         </footer>
       </div>
     </main>
+  </div>
+
+
+  <!-- Account modal -->
+  <div id="accountModal" class="
+    fixed
+    inset-0
+    z-[60]
+    hidden
+    items-center
+    justify-center
+    bg-black/25
+    px-4
+    py-8
+    backdrop-blur-[2px]
+  ">
+    <div class="
+      w-full
+      max-w-md
+      overflow-hidden
+      rounded-2xl
+      border
+      border-line
+      bg-paper
+      shadow-2xl
+    ">
+      <div class="
+        flex
+        items-center
+        justify-between
+        border-b
+        border-line
+        bg-white/70
+        px-5
+        py-4
+      ">
+        <div>
+          <div class="text-sm font-semibold">CalcDaily 账号</div>
+          <div id="accountModalSubtitle" class="mt-0.5 text-[11px] text-muted">
+            登录后同步学习记录
+          </div>
+        </div>
+        <button id="closeAccountModalBtn" class="
+          rounded-lg
+          px-2.5
+          py-1.5
+          text-sm
+          text-muted
+          hover:bg-white
+          hover:text-ink
+        " aria-label="关闭">×</button>
+      </div>
+
+      <div class="p-5">
+        <div id="authConfigNotice" class="
+          hidden
+          rounded-xl
+          border
+          border-[#ead4ca]
+          bg-[#fff8f4]
+          p-4
+          text-xs
+          leading-6
+          text-clay
+        ">
+          Supabase 尚未配置。请先填写 <code>supabase-client.js</code> 中的项目 URL 和 Publishable / Anon Key，再执行数据库 SQL。
+        </div>
+
+        <div id="signedOutPanel">
+          <div class="
+            grid
+            grid-cols-2
+            rounded-xl
+            bg-[#efede8]
+            p-1
+          ">
+            <button id="authLoginTab" class="
+              rounded-lg
+              bg-white
+              px-3
+              py-2
+              text-xs
+              font-medium
+              shadow-sm
+            ">登录</button>
+            <button id="authRegisterTab" class="
+              rounded-lg
+              px-3
+              py-2
+              text-xs
+              font-medium
+              text-muted
+            ">注册</button>
+          </div>
+
+          <form id="authForm" class="mt-5 space-y-4">
+            <div>
+              <label for="authEmailInput" class="text-xs font-medium">邮箱</label>
+              <input id="authEmailInput" type="email" autocomplete="email" required class="
+                mt-2
+                w-full
+                rounded-xl
+                border
+                border-line
+                bg-white
+                px-3.5
+                py-3
+                text-sm
+              " placeholder="you@example.com" />
+            </div>
+
+            <div>
+              <label for="authPasswordInput" class="text-xs font-medium">密码</label>
+              <input id="authPasswordInput" type="password" autocomplete="current-password" required minlength="6" class="
+                mt-2
+                w-full
+                rounded-xl
+                border
+                border-line
+                bg-white
+                px-3.5
+                py-3
+                text-sm
+              " placeholder="至少 6 位" />
+            </div>
+
+            <div id="authMessage" class="hidden rounded-xl bg-[#efede8] px-3.5 py-3 text-xs leading-5 text-muted"></div>
+
+            <button id="authSubmitBtn" type="submit" class="
+              w-full
+              rounded-xl
+              bg-ink
+              px-4
+              py-3
+              text-sm
+              font-medium
+              text-white
+              hover:opacity-90
+              disabled:cursor-not-allowed
+              disabled:opacity-50
+            ">登录</button>
+          </form>
+
+          <p class="mt-4 text-[11px] leading-5 text-muted">
+            游客模式仍可正常刷题。首次登录会把当前浏览器中的学习记录与云端记录合并，不会因为注册而清空本地进度。
+          </p>
+        </div>
+
+        <div id="signedInPanel" class="hidden">
+          <div class="
+            rounded-2xl
+            border
+            border-line
+            bg-white
+            p-4
+          ">
+            <div class="text-[11px] text-muted">当前账号</div>
+            <div id="signedInEmail" class="mt-1 break-all text-sm font-semibold">—</div>
+            <div id="signedInSyncText" class="mt-2 text-xs text-muted">正在读取云端记录…</div>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-2">
+            <button id="syncNowBtn" class="
+              rounded-xl
+              border
+              border-line
+              bg-white
+              px-3
+              py-2.5
+              text-xs
+              font-medium
+              hover:bg-[#faf9f6]
+            ">立即同步</button>
+            <button id="logoutBtn" class="
+              rounded-xl
+              border
+              border-line
+              bg-white
+              px-3
+              py-2.5
+              text-xs
+              font-medium
+              text-clay
+              hover:bg-[#fff8f4]
+            ">退出登录</button>
+          </div>
+
+          <p class="mt-4 text-[11px] leading-5 text-muted">
+            云端保存学习状态、作答记录、模块能力、考点掌握、错题队列与打卡日期；正在进行中的单次刷题 Session 仍保留在本机。
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="
@@ -1549,6 +1806,10 @@
     transition
   "></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./supabase-client.js"></script>
+  <script src="./storage.js"></script>
+  <script src="./auth.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

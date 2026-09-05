@@ -394,9 +394,62 @@
     }
   }
 
-  function saveState() {
+  function saveState(options = {}) {
+    const {
+      skipCloud = false,
+      touchTimestamp = true
+    } = options;
+
+    if (touchTimestamp) {
+      const cloudUserId =
+        window.CalcDailyCloud?.getUser?.()?.id || null;
+
+      state._meta = {
+        ...(state._meta || {}),
+        localUpdatedAt: new Date().toISOString(),
+        ...(cloudUserId
+          ? { cloudUserId }
+          : {})
+      };
+    }
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    if (!skipCloud) {
+      window.CalcDailyCloud?.queueSync?.(deepClone(state));
+    }
   }
+
+  function applyCloudState(nextState) {
+    if (!nextState || typeof nextState !== 'object') return;
+
+    state = mergeState(nextState);
+
+    // activeSession 只在本机续做，不从云端强制覆盖。
+    if (!state.activeSession) {
+      state.activeSession = null;
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    sessionPrefetch.clear();
+    warmupPrefetch.daily = null;
+    warmupPrefetch.diagnosis = null;
+
+    renderAll();
+    switchView(currentView);
+    toast('云端学习记录已同步');
+  }
+
+  window.CalcDailyApp = {
+    getState() {
+      return deepClone(state);
+    },
+    applyCloudState,
+    syncNow() {
+      return window.CalcDailyCloud?.syncNow?.(deepClone(state));
+    }
+  };
 
   /*
   =========================================================
@@ -3950,15 +4003,32 @@
       renderDashboard();
     });
 
-    $('resetDataBtn')?.addEventListener('click', () => {
-      if (!confirm('确定清空本浏览器中的全部刷题记录吗？这个操作无法撤销。')) {
+    $('resetDataBtn')?.addEventListener('click', async () => {
+      const loggedIn = Boolean(window.CalcDailyCloud?.getUser?.());
+
+      const message = loggedIn
+        ? '确定清空当前账号的全部学习记录吗？这会同时清空本机与云端学习数据，且无法撤销。'
+        : '确定清空本浏览器中的全部刷题记录吗？这个操作无法撤销。';
+
+      if (!confirm(message)) {
         return;
+      }
+
+      if (loggedIn) {
+        try {
+          await window.CalcDailyCloud?.resetRemote?.();
+        } catch (error) {
+          console.warn('云端重置失败', error);
+          toast('云端重置失败，未清空本地数据');
+          return;
+        }
       }
 
       localStorage.removeItem(STORAGE_KEY);
       state = deepClone(DEFAULT_STATE);
-      saveState();
-      toast('本地数据已重置');
+      saveState({ skipCloud: loggedIn });
+
+      toast(loggedIn ? '本机与云端学习数据已重置' : '本地数据已重置');
       renderAll();
       switchView('dashboard');
     });
@@ -3969,10 +4039,22 @@
       $('todayLabel').textContent = formatDateCN();
     }
 
+    window.addEventListener('calcdaily:cloud-state-ready', event => {
+      const cloudState = event.detail?.state;
+      if (cloudState) applyCloudState(cloudState);
+    });
+
     bindEvents();
     renderAll();
     switchView('dashboard');
     checkApiHealth();
+
+    const pendingCloudState =
+      window.CalcDailyCloud?.consumePendingState?.();
+
+    if (pendingCloudState) {
+      applyCloudState(pendingCloudState);
+    }
   }
 
   if (document.readyState === 'loading') {
