@@ -3426,7 +3426,7 @@
     currentView = VIEW_META[viewName] ? viewName : 'dashboard';
 
     $$('.view').forEach(el => el.classList.add('hidden'));
-    $(`#view-${currentView}`)?.classList.remove('hidden');
+    $(`view-${currentView}`)?.classList.remove('hidden');
 
     $$('.nav-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.viewTarget === currentView);
