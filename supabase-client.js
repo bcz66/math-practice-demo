@@ -16,8 +16,8 @@
   =========================================================
   */
 
-  const SUPABASE_URL = 'YOUR_SUPABASE_URL';
-  const SUPABASE_PUBLISHABLE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
+  const SUPABASE_URL = 'https://kokjcqeyjhjxolactlfu.supabase.co';
+  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_XZZrp8yUShq-EriAeumhtg_eAq7pWDA';
 
   function looksConfigured(value) {
     const s = String(value || '').trim();
