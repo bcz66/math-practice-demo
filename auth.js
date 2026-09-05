@@ -4,6 +4,7 @@
   let authMode = 'login';
   let currentSessionUserId = null;
   let authBusy = false;
+  let nicknameBusy = false;
   let syncStatus = 'idle';
   let syncMessage = '';
 
@@ -66,6 +67,45 @@
       );
   }
 
+  function setProfileMessage(message, type = 'neutral') {
+    const el = $('profileMessage');
+    if (!el) return;
+
+    if (!message) {
+      el.textContent = '';
+      el.classList.add('hidden');
+      return;
+    }
+
+    el.textContent = message;
+    el.classList.remove('hidden');
+
+    el.className =
+      'mt-3 rounded-xl px-3.5 py-3 text-xs leading-5 ' +
+      (
+        type === 'error'
+          ? 'bg-[#fff0ea] text-clay'
+          : type === 'success'
+            ? 'bg-sageSoft text-sage'
+            : 'bg-[#efede8] text-muted'
+      );
+  }
+
+  function displayNameFor(user) {
+    const metadataName = String(
+      user?.user_metadata?.display_name || ''
+    ).trim();
+
+    if (metadataName) {
+      return metadataName;
+    }
+
+    return (
+      String(user?.email || '').split('@')[0] ||
+      'CalcDaily User'
+    );
+  }
+
   function setMode(mode) {
     authMode = mode === 'register'
       ? 'register'
@@ -75,6 +115,8 @@
     const registerTab = $('authRegisterTab');
     const submit = $('authSubmitBtn');
     const password = $('authPasswordInput');
+    const nicknameField = $('authNicknameField');
+    const nickname = $('authNicknameInput');
 
     if (loginTab) {
       loginTab.className =
@@ -108,6 +150,20 @@
         authMode === 'login'
           ? 'current-password'
           : 'new-password';
+    }
+
+    show(
+      nicknameField,
+      authMode === 'register'
+    );
+
+    if (nickname) {
+      nickname.required =
+        authMode === 'register';
+
+      if (authMode === 'login') {
+        nickname.value = '';
+      }
     }
 
     setMessage('');
@@ -144,10 +200,21 @@
     const dot = $('accountStatusDot');
     const action = $('accountActionBtn');
     const mobile = $('mobileAccountBtn');
+    const reset = $('resetDataBtn');
 
     show($('authConfigNotice'), !isConfigured);
     show($('signedOutPanel'), !user);
     show($('signedInPanel'), Boolean(user));
+
+    if (reset) {
+      reset.textContent = user
+        ? '清空学习数据'
+        : '重置本地数据';
+
+      reset.title = user
+        ? '清空当前账号的本机与云端学习记录，不删除账号'
+        : '清空当前浏览器中的本地学习记录';
+    }
 
     if (!isConfigured) {
       if (title) title.textContent = '云同步未配置';
@@ -172,8 +239,9 @@
     }
 
     const email = user.email || '已登录';
+    const displayName = displayNameFor(user);
 
-    if (title) title.textContent = email;
+    if (title) title.textContent = displayName;
     if (text) text.textContent = syncLabel();
 
     if (dot) {
@@ -194,6 +262,17 @@
 
     if ($('signedInEmail')) {
       $('signedInEmail').textContent = email;
+    }
+
+    if ($('signedInNicknameInput')) {
+      const input = $('signedInNicknameInput');
+
+      if (
+        document.activeElement !== input &&
+        !nicknameBusy
+      ) {
+        input.value = displayName;
+      }
     }
 
     if ($('signedInSyncText')) {
@@ -233,6 +312,7 @@
       window.CalcDailyCloud?.setUser?.(null);
       syncStatus = 'idle';
       syncMessage = '';
+      setProfileMessage('');
       renderAccountUI();
       return;
     }
@@ -296,8 +376,28 @@
       $('authPasswordInput')?.value || ''
     );
 
+    const nickname = String(
+      $('authNicknameInput')?.value || ''
+    ).trim();
+
     if (!email || !password) {
       setMessage('请输入邮箱和密码。', 'error');
+      return;
+    }
+
+    if (
+      authMode === 'register' &&
+      !nickname
+    ) {
+      setMessage('请输入昵称。', 'error');
+      return;
+    }
+
+    if (
+      authMode === 'register' &&
+      nickname.length > 20
+    ) {
+      setMessage('昵称不能超过 20 个字符。', 'error');
       return;
     }
 
@@ -334,9 +434,10 @@
             email,
             password,
             options: {
+              emailRedirectTo:
+                `${window.location.origin}/`,
               data: {
-                display_name:
-                  email.split('@')[0]
+                display_name: nickname
               }
             }
           });
@@ -371,6 +472,115 @@
           authMode === 'login'
             ? '登录'
             : '创建账号';
+      }
+    }
+  }
+
+  async function saveNickname() {
+    const user = currentUser();
+
+    if (
+      !configured() ||
+      !user ||
+      nicknameBusy
+    ) {
+      return;
+    }
+
+    const nickname = String(
+      $('signedInNicknameInput')?.value || ''
+    ).trim();
+
+    if (!nickname) {
+      setProfileMessage(
+        '昵称不能为空。',
+        'error'
+      );
+      return;
+    }
+
+    if (nickname.length > 20) {
+      setProfileMessage(
+        '昵称不能超过 20 个字符。',
+        'error'
+      );
+      return;
+    }
+
+    nicknameBusy = true;
+
+    const button = $('saveNicknameBtn');
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = '保存中…';
+    }
+
+    setProfileMessage('');
+
+    try {
+      const {
+        data,
+        error
+      } = await client().auth.updateUser({
+        data: {
+          display_name: nickname
+        }
+      });
+
+      if (error) throw error;
+
+      const updatedUser =
+        data?.user || {
+          ...user,
+          user_metadata: {
+            ...(user.user_metadata || {}),
+            display_name: nickname
+          }
+        };
+
+      const profileResult =
+        await client()
+          .from('profiles')
+          .upsert(
+            {
+              user_id: updatedUser.id,
+              display_name: nickname,
+              last_active_at:
+                new Date().toISOString()
+            },
+            {
+              onConflict: 'user_id'
+            }
+          );
+
+      if (profileResult.error) {
+        throw profileResult.error;
+      }
+
+      window.CalcDailyCloud?.setUser?.(
+        updatedUser
+      );
+
+      setProfileMessage(
+        '昵称已更新。',
+        'success'
+      );
+
+      renderAccountUI();
+
+    } catch (error) {
+      setProfileMessage(
+        error.message || '昵称更新失败。',
+        'error'
+      );
+
+    } finally {
+      nicknameBusy = false;
+
+      if (button) {
+        button.disabled = false;
+        button.textContent = '保存';
       }
     }
   }
@@ -469,6 +679,21 @@
     $('authForm')?.addEventListener(
       'submit',
       submitAuthForm
+    );
+
+    $('saveNicknameBtn')?.addEventListener(
+      'click',
+      saveNickname
+    );
+
+    $('signedInNicknameInput')?.addEventListener(
+      'keydown',
+      event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          saveNickname();
+        }
+      }
     );
 
     $('syncNowBtn')?.addEventListener(
