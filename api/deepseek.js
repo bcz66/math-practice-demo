@@ -341,7 +341,8 @@ expression:
 禁止把裸 LaTeX 混在中文句子里。
 
 【solution 规则】
-solution 是简洁解析。
+solution 只保留解题所需的核心思路，优先 2–4 句，禁止长篇讲解。
+keySteps 最多 3 条，每条尽量简短。
 solution 中每一个数学表达式必须使用 \\\\( ... \\\\) 包裹。
 不要输出 Markdown code fence。
 
@@ -355,7 +356,7 @@ solution 中每一个数学表达式必须使用 \\\\( ... \\\\) 包裹。
 
 【避免重复】
 尽量避免与以下近期题目高度相似：
-${JSON.stringify(avoidPrompts.slice(0, 10))}
+${JSON.stringify(avoidPrompts.slice(0, 6))}
 
 严格返回 JSON：
 
@@ -384,21 +385,28 @@ ${JSON.stringify(avoidPrompts.slice(0, 10))}
 questions 数量必须为 ${cleanPlans.length}。
 `;
 
+  // 单题不再给 7000 tokens 的巨大输出预算。
+  // 多题时按数量线性增加，保留完整答案/解析，同时减少无意义的长输出等待。
+  const generationMaxTokens = Math.min(
+    5200,
+    1500 + cleanPlans.length * 800
+  );
+
   const generated = await callDeepSeek(
     apiKey,
     [
       {
         role: 'system',
         content:
-          '你负责生成可靠、可核验、适合中国考研与高阶微积分训练的题目。严格返回 JSON。'
+          '你负责生成可靠、可核验、适合中国考研与高阶微积分训练的题目。严格返回 JSON，答案和解析保持简洁。'
       },
       {
         role: 'user',
         content: generationPrompt
       }
     ],
-    7000,
-    0.45
+    generationMaxTokens,
+    0.4
   );
 
   if (!Array.isArray(generated.questions)) {
@@ -586,7 +594,7 @@ evaluations 必须与输入题目一一对应。
         content: evaluatorPrompt
       }
     ],
-    3500,
+    1600,
     0.15
   );
 

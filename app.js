@@ -140,6 +140,12 @@
   let currentView = 'dashboard';
   let apiHealthy = null;
 
+  // 题目预取缓存：把 AI 等待时间尽量藏到用户阅读/作答期间。
+  // 这里只放内存，不写入 LocalStorage，刷新后自然失效。
+  const sessionPrefetch = new Map();
+  const warmupPrefetch = { daily: null, diagnosis: null };
+  const difficultyEvaluationTasks = new Map();
+
   const $ = id => document.getElementById(id);
   const $$ = selector => Array.from(document.querySelectorAll(selector));
 
@@ -1262,11 +1268,44 @@
       }
     })();
 
+    difficultyEvaluationTasks.set(question.id, task);
+
+    task.finally(() => {
+      // 保留一小段时间，提交答案时仍可复用已完成的评估结果。
+      setTimeout(() => {
+        if (difficultyEvaluationTasks.get(question.id) === task) {
+          difficultyEvaluationTasks.delete(question.id);
+        }
+      }, 30000);
+    });
+
     if (waitForResult) {
       return await task;
     }
 
     task.catch(() => {});
+    return question;
+  }
+
+  async function waitForDifficultyEvaluation(question, timeoutMs = 900) {
+    const task = difficultyEvaluationTasks.get(question?.id);
+    if (!task) return question;
+
+    let timer = null;
+
+    try {
+      await Promise.race([
+        task,
+        new Promise(resolve => {
+          timer = setTimeout(resolve, timeoutMs);
+        })
+      ]);
+    } catch {
+      // 独立难度评估失败时继续使用生成器的 provisional difficulty。
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
     return question;
   }
 
@@ -1358,17 +1397,12 @@
       };
 
       /*
-      诊断题：先等待独立评估，再展示。
-      每日/复习：题目先展示，独立评估后台补充，
-      避免用户每题都被两次模型请求卡住。
+      速度优化：
+      - 诊断题仍保留独立 Difficulty Evaluator，但改成后台运行，先把题展示出来；
+      - 每日/复习暂时直接使用生成器给出的 provisional difficulty，避免每题额外再打一遍 AI。
+      目前还没有真实 Anchor，因此这样能明显减小等待，同时不影响后续 Calibration Layer。
       */
       if (plan.purpose === 'diagnosis') {
-        await evaluateDifficultyForQuestion(
-          question,
-          plan,
-          true
-        );
-      } else {
         evaluateDifficultyForQuestion(
           question,
           plan,
@@ -1396,6 +1430,237 @@
       .slice(-limit)
       .map(item => item.prompt || item.expression || '')
       .filter(Boolean);
+  }
+
+  /*
+  =========================================================
+  Question prefetch
+  ---------------------------------------------------------
+  目标：不改变自适应算法，只改变“什么时候请求下一题”。
+  - 进入诊断/每日页时先预热第一题；
+  - 当前题判完后立即在后台准备下一题；
+  - 用户点“下一题”时优先消费已经在路上的 Promise。
+  =========================================================
+  */
+
+  function generationFingerprint(mode) {
+    return JSON.stringify({
+      mode,
+      difficultyMode: state.settings.difficultyMode,
+      manualLevels: state.settings.manualLevels,
+      trainingMode: state.settings.trainingMode,
+      dailyCount: state.settings.dailyCount,
+      abilityByModule: state.profile.abilityByModule,
+      displayLevelByModule: state.profile.displayLevelByModule,
+      dueReviewIds: dueReviews().slice(0, 3).map(item => item.id)
+    });
+  }
+
+  function previewPlanForSession(session) {
+    if (!session || session.completed) return null;
+
+    const shadow = deepClone(session);
+
+    if (shadow.mode === 'daily') {
+      if (shadow.results.length >= shadow.total) return null;
+      return makeDailyPlan(shadow);
+    }
+
+    if (shadow.mode === 'diagnosis') {
+      return diagnosisPlan(shadow);
+    }
+
+    return null;
+  }
+
+  function applyPlanSideEffects(session, plan) {
+    if (!session || !plan) return;
+
+    if (plan.reviewId) {
+      session.usedReviewIds = session.usedReviewIds || [];
+
+      if (!session.usedReviewIds.includes(plan.reviewId)) {
+        session.usedReviewIds.push(plan.reviewId);
+      }
+    }
+  }
+
+  function scheduleSessionPrefetch(session) {
+    if (
+      !session ||
+      session.completed ||
+      !['daily', 'diagnosis'].includes(session.mode) ||
+      session.currentQuestion === null && session.results.length === 0
+    ) {
+      return;
+    }
+
+    const plan = previewPlanForSession(session);
+    if (!plan) return;
+
+    const key = session.id;
+    const signature = `${session.results.length}:${JSON.stringify(plan)}`;
+    const existing = sessionPrefetch.get(key);
+
+    if (existing?.signature === signature) return;
+
+    const promise = generateOneQuestion(plan)
+      .then(question => ({ question, plan }))
+      .catch(error => {
+        console.warn('下一题预取失败，将在点击下一题时重试。', error);
+        return null;
+      });
+
+    sessionPrefetch.set(key, {
+      signature,
+      resultCount: session.results.length,
+      promise
+    });
+  }
+
+  function scheduleSpeculativePrefetch(session, question) {
+    if (
+      !session ||
+      session.completed ||
+      session.mode !== 'daily' ||
+      !question ||
+      session.results.length + 1 >= session.total
+    ) {
+      return;
+    }
+
+    const shadow = deepClone(session);
+    const theta = Number(state.profile.abilityByModule[question.module]) || 6;
+    const b = Number(
+      question.calibratedDifficulty ??
+      question.provisionalDifficulty ??
+      question.requestedDifficulty
+    ) || 6;
+
+    // 在用户作答期间先按“更可能的结果”推演下一题。
+    // 真正提交后如果计划不兼容，会自动丢弃，不影响自适应准确性。
+    const predictedCorrect = correctProbability(theta, b) >= 0.5;
+
+    shadow.results.push({
+      module: question.module,
+      topic: question.topic,
+      correct: predictedCorrect,
+      zone: question.zone || question.planPurpose,
+      speculative: true
+    });
+
+    const plan = makeDailyPlan(shadow);
+    if (!plan) return;
+
+    const signature = `${shadow.results.length}:${JSON.stringify(plan)}`;
+    const existing = sessionPrefetch.get(session.id);
+
+    if (existing?.signature === signature) return;
+
+    const promise = generateOneQuestion(plan)
+      .then(nextQuestion => ({ question: nextQuestion, plan }))
+      .catch(error => {
+        console.warn('作答期间的下一题预取失败。', error);
+        return null;
+      });
+
+    sessionPrefetch.set(session.id, {
+      signature,
+      resultCount: shadow.results.length,
+      promise
+    });
+  }
+
+  function plansCompatible(prefetchedPlan, expectedPlan) {
+    if (!prefetchedPlan || !expectedPlan) return false;
+
+    if (prefetchedPlan.module !== expectedPlan.module) return false;
+    if ((prefetchedPlan.purpose || 'daily') !== (expectedPlan.purpose || 'daily')) return false;
+    if ((prefetchedPlan.reviewId || null) !== (expectedPlan.reviewId || null)) return false;
+
+    const a = Number(prefetchedPlan.targetDifficulty) || 6;
+    const b = Number(expectedPlan.targetDifficulty) || 6;
+
+    return Math.abs(a - b) <= 0.75;
+  }
+
+  async function consumeSessionPrefetch(session, expectedPlan = null) {
+    const cached = sessionPrefetch.get(session?.id);
+    if (!cached) return null;
+
+    sessionPrefetch.delete(session.id);
+
+    if (cached.resultCount !== session.results.length) {
+      return null;
+    }
+
+    const value = await cached.promise;
+    if (!value?.question) return null;
+
+    // 如果用户刚刚把错误改标成“粗心/输入失误”，Ability 可能被回滚。
+    // 这时若下一题计划已明显变化，就丢弃旧预取，宁可重新生成，也不牺牲自适应准确性。
+    if (expectedPlan && !plansCompatible(value.plan, expectedPlan)) {
+      return null;
+    }
+
+    applyPlanSideEffects(session, value.plan);
+    value.question.zone = value.plan.zone || value.plan.purpose;
+
+    return value.question;
+  }
+
+  function warmupPlan(mode) {
+    if (mode === 'daily') {
+      const shadow = createDailySession();
+      return makeDailyPlan(shadow);
+    }
+
+    if (mode === 'diagnosis') {
+      const shadow = createDiagnosisSession();
+      return diagnosisPlan(shadow);
+    }
+
+    return null;
+  }
+
+  function prefetchWarmup(mode) {
+    if (!['daily', 'diagnosis'].includes(mode)) return;
+    if (state.activeSession && !state.activeSession.completed) return;
+
+    const fingerprint = generationFingerprint(mode);
+    const current = warmupPrefetch[mode];
+
+    if (current?.fingerprint === fingerprint) return;
+
+    const plan = warmupPlan(mode);
+    if (!plan) return;
+
+    warmupPrefetch[mode] = {
+      fingerprint,
+      plan,
+      promise: generateOneQuestion(plan)
+        .then(question => ({ question, plan }))
+        .catch(error => {
+          console.warn(`${mode} 第一题预热失败，将在开始时重试。`, error);
+          return null;
+        })
+    };
+  }
+
+  async function consumeWarmup(mode, session) {
+    const cached = warmupPrefetch[mode];
+    warmupPrefetch[mode] = null;
+
+    if (!cached) return null;
+    if (cached.fingerprint !== generationFingerprint(mode)) return null;
+
+    const value = await cached.promise;
+    if (!value?.question) return null;
+
+    applyPlanSideEffects(session, value.plan);
+    value.question.zone = value.plan.zone || value.plan.purpose;
+
+    return value.question;
   }
 
   /*
@@ -2128,8 +2393,14 @@
       }
     }
 
-    session.currentQuestion = await generateOneQuestion(plan);
-    session.currentQuestion.zone = plan.zone || plan.purpose;
+    const prefetched = await consumeSessionPrefetch(session, plan);
+
+    if (prefetched) {
+      session.currentQuestion = prefetched;
+    } else {
+      session.currentQuestion = await generateOneQuestion(plan);
+      session.currentQuestion.zone = plan.zone || plan.purpose;
+    }
 
     saveState();
     renderActiveSession(containerId);
@@ -2264,6 +2535,10 @@
     });
 
     typesetMath(container);
+
+    // 用户真正开始读题/作答时，后台先猜测性准备下一题。
+    // 如果实际答题结果导致计划变化，提交后会自动重新生成正确计划。
+    scheduleSpeculativePrefetch(session, q);
   }
 
   async function submitCurrentAnswer(containerId) {
@@ -2283,6 +2558,12 @@
 
     button.disabled = true;
     button.textContent = '判题中…';
+
+    // 诊断题的独立难度评估已在用户作答期间后台运行。
+    // 提交时最多再等 0.9 秒，没完成就直接使用 provisional difficulty，避免重新出现几十秒等待。
+    if (session.mode === 'diagnosis') {
+      await waitForDifficultyEvaluation(q, 900);
+    }
 
     const verdict = await judgeAnswer(q, userAnswer);
 
@@ -2386,6 +2667,10 @@
     session.results.push(result);
 
     saveState();
+
+    // 用户查看判题反馈/解析时，后台已经开始准备下一题。
+    scheduleSessionPrefetch(session);
+
     renderAnswerFeedback(
       session,
       q,
@@ -2789,6 +3074,7 @@
   }
 
   function finishSession(session) {
+    sessionPrefetch.delete(session.id);
     session.completed = true;
     session.completedAt = new Date().toISOString();
     session.currentQuestion = null;
@@ -2966,8 +3252,17 @@
     $('diagnosisIntro')?.classList.add('hidden');
     $('diagnosisSession')?.classList.remove('hidden');
 
-    renderSessionLoading('diagnosisSession', '正在生成第一道定位题…');
-    await ensureCurrentQuestion(state.activeSession);
+    renderSessionLoading('diagnosisSession', '正在读取定位题…');
+
+    const warmed = await consumeWarmup('diagnosis', state.activeSession);
+
+    if (warmed) {
+      state.activeSession.currentQuestion = warmed;
+      saveState();
+      renderActiveSession('diagnosisSession');
+    } else {
+      await ensureCurrentQuestion(state.activeSession);
+    }
   }
 
   async function startDaily() {
@@ -2977,8 +3272,17 @@
     $('dailyIntro')?.classList.add('hidden');
     $('dailySession')?.classList.remove('hidden');
 
-    renderSessionLoading('dailySession', '正在根据当前能力准备第一题…');
-    await ensureCurrentQuestion(state.activeSession);
+    renderSessionLoading('dailySession', '正在读取今日第一题…');
+
+    const warmed = await consumeWarmup('daily', state.activeSession);
+
+    if (warmed) {
+      state.activeSession.currentQuestion = warmed;
+      saveState();
+      renderActiveSession('dailySession');
+    } else {
+      await ensureCurrentQuestion(state.activeSession);
+    }
   }
 
   async function startReview() {
@@ -3442,8 +3746,14 @@
     }
 
     if (currentView === 'dashboard') renderDashboard();
-    if (currentView === 'diagnosis') renderDiagnosisSummary();
-    if (currentView === 'daily') renderDailyPreview();
+    if (currentView === 'diagnosis') {
+      renderDiagnosisSummary();
+      prefetchWarmup('diagnosis');
+    }
+    if (currentView === 'daily') {
+      renderDailyPreview();
+      prefetchWarmup('daily');
+    }
     if (currentView === 'review') renderReviewIntro();
     if (currentView === 'checkin') renderCheckin();
     if (currentView === 'settings') renderSettings();
